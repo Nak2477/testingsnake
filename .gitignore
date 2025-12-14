@@ -1,0 +1,5 @@
+build/
+test_main
+*.o
+*.a
+*.so

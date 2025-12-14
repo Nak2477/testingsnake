@@ -1,0 +1,56 @@
+#pragma once
+
+#include "hardcoresnake.h"
+#include "rendermenu.h"
+#include "rendergame.h"
+#include "multiplayer.h"
+#include <SDL2/SDL.h>
+#include <SDL2/SDL_ttf.h>
+#include <vector>
+
+class Game {
+private:
+    // SDL components
+    SDL_Window* window;
+    SDL_Renderer* renderer;
+    TTF_Font* font;
+    TTF_Font* titleFont;
+    
+    // Rendering
+    MenuRenderer* ui;
+    GameRenderer* gameRenderer;
+    
+    // Game state
+    GameContext ctx;
+    Food food;
+    std::vector<Position> occupiedPositions;
+    
+    // Game loop state
+    bool quit;
+    bool paused;
+    bool gameOver;
+    bool matchEnded;
+    int winnerIndex;
+    Uint32 lastUpdate;
+    Uint32 matchStartTime;
+    int updateInterval;
+
+public:
+    Game();
+    ~Game();
+    
+    void run();
+
+private:
+    bool initSDL();
+    void initMultiplayer();
+    void initPlayers();
+    
+    void handleInput();
+    void update();
+    void render();
+    
+    void checkMatchTimer(Uint32 currentTime);
+    void updatePlayers();
+    void resetMatch();
+};
