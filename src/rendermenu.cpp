@@ -182,7 +182,7 @@ void MenuRenderer::renderGameOver(const std::vector<std::unique_ptr<Snake>>& sna
         SDL_RenderFillRect(renderer, &scoreRect);
 
         // Use dynamic renderText for scores (changes every game)
-        snprintf(scoreText, sizeof(scoreText), "Player %d: %d", snakes[i]->getPlayerNum(), snakes[i]->getScore());
+        snprintf(scoreText, sizeof(scoreText), "Player %d: %d", (int)i + 1, snakes[i]->getScore());
         renderText(scoreText, WINDOW_WIDTH / 2 - 80, WINDOW_HEIGHT / 2 - 40 + i * 40, {255, 255, 255, 255});
     }
 

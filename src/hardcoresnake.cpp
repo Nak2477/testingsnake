@@ -1,11 +1,11 @@
 #include "hardcoresnake.h"
+#include "multiplayer.h"
 
 // Snake implementation
-Snake::Snake(int playerNumber, SDL_Color snakeColor, Position startPos)
+Snake::Snake(SDL_Color snakeColor, Position startPos)
     :   direction(Direction::NONE),
     nextDirection(Direction::NONE),
         color(snakeColor),
-        playerNum(playerNumber),
         alive(true),
         score(0) {
     
@@ -54,18 +54,16 @@ void Snake::grow()
     if (body.empty()) return;
     
     Position tail = body.back();
-    body.push_back(tail); // Add segment at tail position
+    body.push_back(tail);
     score += 10;
 }
 
 void Snake::reset(Position startPos)
 {
-    // 1. Reset body to 2 segments (or starting length)
     body.clear();
     body.push_back(startPos);
     body.push_back({startPos.x - 1, startPos.y});
     
-    // 2. Reset state
     direction = Direction::NONE;
     nextDirection = Direction::NONE;
     alive = true;
@@ -113,7 +111,7 @@ bool Snake::checkBoundaryCollision() const
 // Food implementation
 Food::Food() : color{255, 0, 0, 255}
 {
-    std::srand(std::time(nullptr));
+    // Note: srand() is called in main(), not here
 }
 
 void Food::spawn(const std::vector<Position>& occupiedPositions)

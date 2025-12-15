@@ -4,15 +4,7 @@
 #include "hardcoresnake.h"
 #include "rendermenu.h"
 #include <array>
-#include <memory>
 #include <string>
-
-// Forward declaration
-struct PlayerSlot {
-    std::unique_ptr<Snake> snake;
-    std::string clientId;
-    bool active;
-};
 
 class GameRenderer {
 private:

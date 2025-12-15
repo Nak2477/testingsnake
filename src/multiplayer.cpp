@@ -4,37 +4,80 @@
 void on_multiplayer_event( const char *event, int64_t messageId, const char *clientId, json_t *data, void *user_data)
 {
     GameContext* ctx = (GameContext*)user_data;
-	
-	char* strData = NULL;
-	
-	if(data)
-		strData = json_dumps(data, JSON_INDENT(2));
 
-	printf("Multiplayer event: %s (msgId: %lld, clientId: %s)\n", event, (long long)messageId, clientId ? clientId : "null");
-	if (strData)
-	{
-		printf("Data: %s\n", strData);
-	}
-
-    /* event: "joined", "leaved" (om servern skickar det), eller "game" */
     if (strcmp(event, "joined") == 0) {
         std::string myClientId = (ctx->myPlayerIndex >= 0) ? ctx->players[ctx->myPlayerIndex].clientId : "";
         if (clientId && std::string(clientId) != myClientId) {
             add_player(*ctx, clientId);
+            
+            // If we're the host, send current game state to new player
+            if (ctx->isHost && ctx->food) {
+                json_t *gameState = json_object();
+                json_object_set_new(gameState, "type", json_string("state_sync"));
+                json_object_set_new(gameState, "foodX", json_integer(ctx->food->getPosition().x));
+                json_object_set_new(gameState, "foodY", json_integer(ctx->food->getPosition().y));
+                json_object_set_new(gameState, "matchStartTime", json_integer(ctx->matchStartTime));
+                
+                // Add existing players info
+                json_t *playersArray = json_array();
+                for (int i = 0; i < 4; i++) {
+                    if (ctx->players[i].active && !ctx->players[i].clientId.empty()) {
+                        json_array_append_new(playersArray, json_string(ctx->players[i].clientId.c_str()));
+                    }
+                }
+                json_object_set_new(gameState, "players", playersArray);
+                
+                mp_api_game(ctx->api, gameState);
+                json_decref(gameState);
+            }
         }
 	} else if (strcmp(event, "leaved") == 0) {
         if (clientId) {
             remove_player(*ctx, clientId);
         }
     } else if (strcmp(event, "game") == 0) {
+        // Process updates from other clients
+        std::string myClientId = (ctx->myPlayerIndex >= 0) ? ctx->players[ctx->myPlayerIndex].clientId : "";
         if (clientId && data) {
-            update_remote_player(*ctx, clientId, data);
+            // Check if this is a state sync from host
+            json_t *type_val = json_object_get(data, "type");
+            if (json_is_string(type_val) && strcmp(json_string_value(type_val), "state_sync") == 0) {
+                // Sync game state from host
+                json_t *foodX = json_object_get(data, "foodX");
+                json_t *foodY = json_object_get(data, "foodY");
+                json_t *matchTime = json_object_get(data, "matchStartTime");
+                
+                if (json_is_integer(foodX) && json_is_integer(foodY) && ctx->food) {
+                    Position newFoodPos;
+                    newFoodPos.x = json_integer_value(foodX);
+                    newFoodPos.y = json_integer_value(foodY);
+                    ctx->food->setPosition(newFoodPos);
+                }
+                
+                if (json_is_integer(matchTime)) {
+                    ctx->matchStartTime = json_integer_value(matchTime);
+                }
+                
+                // Add existing players from host
+                json_t *playersArray = json_object_get(data, "players");
+                if (json_is_array(playersArray)) {
+                    size_t index;
+                    json_t *playerClientId;
+                    json_array_foreach(playersArray, index, playerClientId) {
+                        if (json_is_string(playerClientId)) {
+                            std::string pId = json_string_value(playerClientId);
+                            std::string myClientId = (ctx->myPlayerIndex >= 0) ? ctx->players[ctx->myPlayerIndex].clientId : "";
+                            if (pId != myClientId && find_player_by_client_id(*ctx, pId) < 0) {
+                                add_player(*ctx, pId);
+                            }
+                        }
+                    }
+                }
+            } else if (std::string(clientId) != myClientId) {
+                update_remote_player(*ctx, clientId, data);
+            }
         }
     }
-
-	free(strData);
-
-    /* data är ett json_t* (object); anropa json_incref(data) om du vill spara det efter callbacken */
 }
 
 void send_game_state(GameContext& ctx, const Snake& snake)
@@ -42,7 +85,7 @@ void send_game_state(GameContext& ctx, const Snake& snake)
     if (!ctx.api) {
         static bool warned = false;
         if (!warned) {
-            std::cout << "[MP] API not initialized" << std::endl;
+            std::cout << "API not initialized" << std::endl;
             warned = true;
         }
         return;
@@ -51,7 +94,7 @@ void send_game_state(GameContext& ctx, const Snake& snake)
     if (ctx.sessionId.empty()) {
         static bool warned = false;
         if (!warned) {
-            std::cout << "[MP] Not in a session. Press H to host or L to list sessions" << std::endl;
+            std::cout << "Not in a session. Press H to host or L to list sessions" << std::endl;
             warned = true;
         }
         return;
@@ -75,16 +118,32 @@ void send_game_state(GameContext& ctx, const Snake& snake)
     json_object_set_new(gameData, "body", bodyArray);
     
     int rc = mp_api_game(ctx.api, gameData);
-    if (rc == MP_API_OK) {
-        static int sendCount = 0;
-        if (++sendCount % 10 == 0) {  // Print every 10 sends
-            std::cout << "[MP] Sent game state #" << sendCount << std::endl;
-        }
-    } else {
-        std::cerr << "[MP] Failed to send game state: " << rc << std::endl;
+    if (rc != MP_API_OK) {
+        std::cerr << "Failed to send game state: " << rc << std::endl;
     }
     
     json_decref(gameData);
+}
+
+void sendPlayerUpdate(GameContext& ctx, int playerIndex)
+{
+    // Validate player index and state
+    if (playerIndex < 0 || playerIndex >= 4)
+        return;
+    if (!ctx.players[playerIndex].active || !ctx.players[playerIndex].snake)
+        return;
+    if (ctx.sessionId.empty() || !ctx.api)
+        return;
+    
+    // Throttle to avoid network spam
+    Uint32 currentTime = SDL_GetTicks();
+    if (currentTime - ctx.players[playerIndex].lastMpSent < 100) {
+        return;
+    }
+    
+    // Send the update
+    send_game_state(ctx, *ctx.players[playerIndex].snake);
+    ctx.players[playerIndex].lastMpSent = currentTime;
 }
 
 int multiplayer_host(GameContext& ctx)
@@ -103,11 +162,15 @@ int multiplayer_host(GameContext& ctx)
 
 	// Store session ID and client ID in context
 	ctx.sessionId = session;
+	ctx.isHost = true;  // Mark as host
 	printf("Du hostar session: %s (clientId: %s)\n", session, clientId);
 	
 	// Add myself as a player
 	add_player(ctx, clientId);
 	ctx.myPlayerIndex = find_player_by_client_id(ctx, clientId);
+	
+	// Initialize match start time as host
+	ctx.matchStartTime = SDL_GetTicks();
 	
 	/* hostData kan innehålla extra data från servern (oftast tomt objekt) */
 	if (hostData) {
@@ -146,9 +209,12 @@ int multiplayer_list(GameContext& ctx)
 		size_t index;
 		json_t *value;
 		printf("Tillgängliga publika sessioner (Press 1-4 to join):\n");
+
 		json_array_foreach(sessionList, index, value) {
 			json_t *sess_val = json_object_get(value, "id");
-			if (json_is_string(sess_val)) {
+
+			if (json_is_string(sess_val))
+            {
 				const char *sessionId = json_string_value(sess_val);
 				ctx.availableSessions.push_back(sessionId);
 				printf(" [%zu] %s\n", index + 1, sessionId);
@@ -177,6 +243,7 @@ int multiplayer_join(GameContext& ctx, const char* sessionId)
 
 	if (rc == MP_API_OK) {
 		ctx.sessionId = joinedSession;
+		ctx.isHost = false;  // Mark as non-host
 		printf("Ansluten till session: %s (clientId: %s)\n", joinedSession, joinedClientId);
 		
 		// Add myself as a player
@@ -184,7 +251,9 @@ int multiplayer_join(GameContext& ctx, const char* sessionId)
 		ctx.myPlayerIndex = find_player_by_client_id(ctx, joinedClientId);
 		
 		/* joinData kan innehålla status eller annan info */
-		if (joinData) json_decref(joinData);
+		if (joinData) {
+			json_decref(joinData);
+		}
 		free(joinedSession);
 		free(joinedClientId);
 	} else if (rc == MP_API_ERR_REJECTED) {
@@ -196,7 +265,6 @@ int multiplayer_join(GameContext& ctx, const char* sessionId)
 	return 0;
 }
 
-// Helper functions for player management
 void add_player(GameContext& ctx, const std::string& clientId)
 {
     // Find first available slot
@@ -216,9 +284,10 @@ void add_player(GameContext& ctx, const std::string& clientId)
                 {255, 0, 255, 255}  // Magenta
             };
             
-            ctx.players[i].snake = std::make_unique<Snake>(i+1, colors[i], spawnPos[i]);
+            ctx.players[i].snake = std::make_unique<Snake>(colors[i], spawnPos[i]);
             ctx.players[i].clientId = clientId;
             ctx.players[i].active = true;
+            ctx.players[i].lastMpSent = 0;
             
             std::cout << "Player " << (i+1) << " joined: " << clientId << std::endl;
             break;
@@ -228,8 +297,10 @@ void add_player(GameContext& ctx, const std::string& clientId)
 
 int find_player_by_client_id(const GameContext& ctx, const std::string& clientId)
 {
-    for (int i = 0; i < 4; i++) {
-        if (ctx.players[i].active && ctx.players[i].clientId == clientId) {
+    for (int i = 0; i < 4; i++)
+    {
+        if (ctx.players[i].active && ctx.players[i].clientId == clientId)
+        {
             return i;
         }
     }
@@ -239,20 +310,27 @@ int find_player_by_client_id(const GameContext& ctx, const std::string& clientId
 void update_remote_player(GameContext& ctx, const std::string& clientId, json_t* data)
 {
     int idx = find_player_by_client_id(ctx, clientId);
-    if (idx < 0 || !ctx.players[idx].snake) return;
     
-    // Update snake body from network data
+    if (idx < 0 || !ctx.players[idx].snake) {
+        return;
+    }
+
     json_t *bodyArray = json_object_get(data, "body");
-    if (json_is_array(bodyArray) && json_array_size(bodyArray) > 0) {
+
+    if (json_is_array(bodyArray) && json_array_size(bodyArray) > 0)
+    {
         std::deque<Position> newBody;
         
         size_t index;
         json_t *segment;
-        json_array_foreach(bodyArray, index, segment) {
-            json_t *x_val = json_object_get(segment, "x");
-            json_t *y_val = json_object_get(segment, "y");
+
+        json_array_foreach(bodyArray, index, segment)
+        {
+        json_t *x_val = json_object_get(segment, "x");
+        json_t *y_val = json_object_get(segment, "y");
             
-            if (json_is_integer(x_val) && json_is_integer(y_val)) {
+            if (json_is_integer(x_val) && json_is_integer(y_val))
+            {
                 Position pos;
                 pos.x = json_integer_value(x_val);
                 pos.y = json_integer_value(y_val);
@@ -260,30 +338,31 @@ void update_remote_player(GameContext& ctx, const std::string& clientId, json_t*
             }
         }
         
-        if (!newBody.empty()) {
+        if (!newBody.empty())
+        {
             ctx.players[idx].snake->setBody(newBody);
         }
     }
-    
-    // Update score
+
     json_t *score_val = json_object_get(data, "score");
-    if (json_is_integer(score_val)) {
-        int score = json_integer_value(score_val);
-        // Snake doesn't have setScore, so we can't update it directly
-        // But the body sync is the most important part
+    if (json_is_integer(score_val))
+    {
+        ctx.players[idx].snake->setScore(json_integer_value(score_val));
     }
     
-    // Update alive status
     json_t *alive_val = json_object_get(data, "alive");
-    if (json_is_boolean(alive_val)) {
+    if (json_is_boolean(alive_val))
+    {
         ctx.players[idx].snake->setAlive(json_boolean_value(alive_val));
     }
 }
 
 void remove_player(GameContext& ctx, const std::string& clientId)
 {
-    for (int i = 0; i < 4; i++) {
-        if (ctx.players[i].active && ctx.players[i].clientId == clientId) {
+    for (int i = 0; i < 4; i++)
+    {
+        if (ctx.players[i].active && ctx.players[i].clientId == clientId)
+        {
             ctx.players[i].active = false;
             ctx.players[i].snake = nullptr;
             ctx.players[i].clientId = "";

@@ -75,7 +75,7 @@ set(SNAKE_CPP_SOURCES
 # Create main executable
 add_executable(HardcoreSnake
     ${SNAKE_CPP_SOURCES}
-    main.cpp
+    src/main.cpp
 )
 
 # Link libraries

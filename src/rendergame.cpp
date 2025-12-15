@@ -106,7 +106,7 @@ void GameRenderer::renderHUD(int score, int remainingSeconds, const std::string&
     int minutes = remainingSeconds / 60;
     int seconds = remainingSeconds % 60;
     snprintf(text, sizeof(text), "Time: %02d:%02d", minutes, seconds);
-    ui->renderText(text, WINDOW_WIDTH - 120, 10, {255, 255, 0, 255});
+    ui->renderText(text, WINDOW_WIDTH -150, 10, {255, 255, 0, 255});
     
     // Session ID
     if (!sessionId.empty())

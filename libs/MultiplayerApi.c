@@ -129,7 +129,7 @@ int mp_api_host(MultiplayerApi *api,
     json_t *root = json_object();
     if (!root) return MP_API_ERR_IO;
 
-    //json_object_set_new(root, "identifier", json_string("HardcoreSnakeClient")); // my edit
+    json_object_set_new(root, "identifier", json_string("HardcoreSnakeClient"));
     json_object_set_new(root, "session", json_null());
     json_object_set_new(root, "cmd", json_string("host"));
     json_object_set_new(root, "data", json_object());
@@ -215,7 +215,7 @@ int mp_api_list(MultiplayerApi *api, json_t **out_list)
 	json_t *root = json_object();
 	if (!root) return MP_API_ERR_IO;
 
-	//json_object_set_new(root, "identifier", json_string("HardcoreSnakeClient")); // my edit
+	json_object_set_new(root, "identifier", json_string("HardcoreSnakeClient"));
 	json_object_set_new(root, "cmd", json_string("list"));
 
 	rc = send_json_line(api, root);
@@ -228,8 +228,6 @@ int mp_api_list(MultiplayerApi *api, json_t **out_list)
 	if (rc != MP_API_OK) {
 		return rc;
 	}
-
-	printf("Received line: %s\n", line); // Debug print
 
 	json_error_t jerr;
 	json_t *resp = json_loads(line, 0, &jerr);
@@ -279,7 +277,7 @@ int mp_api_join(MultiplayerApi *api,
     json_t *root = json_object();
     if (!root) return MP_API_ERR_IO;
 
-    //json_object_set_new(root, "identifier", json_string("HardcoreSnakeClient")); // my edit
+    json_object_set_new(root, "identifier", json_string("HardcoreSnakeClient"));
     json_object_set_new(root, "session", json_string(sessionId));
     json_object_set_new(root, "cmd", json_string("join"));
 
@@ -381,6 +379,7 @@ int mp_api_game(MultiplayerApi *api, json_t *data) {
     json_t *root = json_object();
     if (!root) return MP_API_ERR_IO;
 
+    json_object_set_new(root, "identifier", json_string("HardcoreSnakeClient"));
     json_object_set_new(root, "session", json_string(api->session_id));
     json_object_set_new(root, "cmd", json_string("game"));
 

@@ -8,6 +8,7 @@
 #include <SDL2/SDL_ttf.h>
 #include <vector>
 
+
 class Game {
 private:
     // SDL components
@@ -53,4 +54,10 @@ private:
     void checkMatchTimer(Uint32 currentTime);
     void updatePlayers();
     void resetMatch();
+    void respawnPlayer(int playerIndex);
+    
+    // Constants
+    static constexpr int MULTIPLAYER_UPDATE_THROTTLE_MS = 100;
+    static constexpr int MIN_UPDATE_INTERVAL = 50;
+    static constexpr int SPEED_INCREASE = 2;
 };

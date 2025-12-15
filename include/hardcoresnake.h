@@ -8,6 +8,7 @@
 #include <iostream>
 #include <deque>
 #include <vector>
+#include <memory>
 
 // Game constants
 const int WINDOW_WIDTH = 800;
@@ -37,6 +38,9 @@ struct Position {
     }
 };
 
+// Forward declaration
+//struct GameContext;
+
 // Snake class
 class Snake {
 private:
@@ -44,30 +48,39 @@ private:
     Direction direction;
     Direction nextDirection;
     SDL_Color color;
-    int playerNum;
     bool alive;
     int score;
     
 public:
-    Snake(int playerNumber, SDL_Color snakeColor, Position startPos);
+    Snake(SDL_Color snakeColor, Position startPos);
     
     void setDirection(Direction dir);
     void update();
     void grow();
     void reset(Position startPos);
-    void setBody(const std::deque<Position>& newBody);
+
     bool checkCollision(const Position& pos) const;
     bool checkSelfCollision() const;
     bool checkBoundaryCollision() const;
     
+    void setBody(const std::deque<Position>& newBody);
     const std::deque<Position>& getBody() const { return body; }
+
     Position getHead() const { return body.front(); }
     SDL_Color getColor() const { return color; }
+
     bool isAlive() const { return alive; }
     void setAlive(bool status) { alive = status; }
     int getScore() const { return score; }
-    void addScore(int points) { score += points; }
-    int getPlayerNum() const { return playerNum; }
+    void setScore(int newScore) { score = newScore; }
+};
+
+// PlayerSlot structure - represents a game slot that can hold a player/snake
+struct PlayerSlot {
+    std::unique_ptr<Snake> snake;
+    std::string clientId;
+    bool active;
+    Uint32 lastMpSent;  // Track last multiplayer send time for throttling
 };
 
 // Food class
@@ -79,6 +92,7 @@ private:
 public:
     Food();
     void spawn(const std::vector<Position>& occupiedPositions);
+    void setPosition(const Position& newPos) { pos = newPos; }
     Position getPosition() const { return pos; }
     SDL_Color getColor() const { return color; }
 };
