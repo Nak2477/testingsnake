@@ -346,6 +346,43 @@ void Game::updatePlayers()
         if (!ctx.players[i].snake->isAlive())
             continue;
         
+        // Check food collision for all players locally
+        if (ctx.players[i].snake->isAlive() && ctx.players[i].snake->getHead() == food.getPosition())
+        {
+            ctx.players[i].snake->grow();
+            
+            // Send multiplayer update if it's our player
+            if (i == ctx.myPlayerIndex) {
+                sendPlayerUpdate(ctx, i);
+            }
+            
+            // Only host spawns new food and broadcasts it
+            if (ctx.isHost) {
+                occupiedPositions.clear();
+                for (int k = 0; k < 4; k++)
+                {
+                    if (ctx.players[k].active && ctx.players[k].snake)
+                    {
+                        for (const auto& segment : ctx.players[k].snake->getBody()) {
+                            occupiedPositions.push_back(segment);
+                        }
+                    }
+                }
+                food.spawn(occupiedPositions);
+                
+                // Broadcast new food position
+                json_t *foodUpdate = json_object();
+                json_object_set_new(foodUpdate, "type", json_string("state_sync"));
+                json_object_set_new(foodUpdate, "foodX", json_integer(food.getPosition().x));
+                json_object_set_new(foodUpdate, "foodY", json_integer(food.getPosition().y));
+                json_object_set_new(foodUpdate, "matchStartTime", json_integer(ctx.matchStartTime));
+                mp_api_game(ctx.api, foodUpdate);
+                json_decref(foodUpdate);
+            }
+            
+            if (updateInterval > MIN_UPDATE_INTERVAL) updateInterval -= SPEED_INCREASE;
+        }
+        
         // Only update local player locally - remote players are updated via network
         if (i != ctx.myPlayerIndex)
             continue;
@@ -379,41 +416,6 @@ void Game::updatePlayers()
                 std::cout << "Player " << (i+1) << " hit player " << (j+1) << " and respawned!" << std::endl;
                 break;
             }
-        }
-        
-        // Check food collision
-        if (ctx.players[i].snake->isAlive() && ctx.players[i].snake->getHead() == food.getPosition())
-        {
-            ctx.players[i].snake->grow();
-            
-            // Send multiplayer update for local player
-            sendPlayerUpdate(ctx, i);
-            
-            // Only host spawns new food and broadcasts it
-            if (ctx.isHost) {
-                occupiedPositions.clear();
-                for (int k = 0; k < 4; k++)
-                {
-                    if (ctx.players[k].active && ctx.players[k].snake)
-                    {
-                        for (const auto& segment : ctx.players[k].snake->getBody()) {
-                            occupiedPositions.push_back(segment);
-                        }
-                    }
-                }
-                food.spawn(occupiedPositions);
-                
-                // Broadcast new food position
-                json_t *foodUpdate = json_object();
-                json_object_set_new(foodUpdate, "type", json_string("state_sync"));
-                json_object_set_new(foodUpdate, "foodX", json_integer(food.getPosition().x));
-                json_object_set_new(foodUpdate, "foodY", json_integer(food.getPosition().y));
-                json_object_set_new(foodUpdate, "matchStartTime", json_integer(ctx.matchStartTime));
-                mp_api_game(ctx.api, foodUpdate);
-                json_decref(foodUpdate);
-            }
-            
-            if (updateInterval > MIN_UPDATE_INTERVAL) updateInterval -= SPEED_INCREASE;
         }
     }
 }

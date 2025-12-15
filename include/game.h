@@ -8,6 +8,13 @@
 #include <SDL2/SDL_ttf.h>
 #include <vector>
 
+enum class GameState {
+    MENU,           // Initial menu - host/join choice
+    LOBBY,          // Waiting for players
+    COUNTDOWN,      // 3-2-1 countdown
+    PLAYING,        // Active match
+    MATCH_END       // Results screen
+};
 
 class Game {
 private:
