@@ -18,6 +18,13 @@ const int GRID_WIDTH = WINDOW_WIDTH / GRID_SIZE;
 const int GRID_HEIGHT = WINDOW_HEIGHT / GRID_SIZE;
 const int INITIAL_SPEED = 150; // milliseconds per update
 const int MATCH_DURATION_SECONDS = 120; // 2 minutes per match (requirement 5.1)
+const int MAX_FOOD_SPAWN_ATTEMPTS = 1000; // Max attempts to find empty cell
+
+// Network timing constants
+const Uint32 STATE_SYNC_INTERVAL_MS = 5000;  // Host broadcasts full state every 5s
+const Uint32 DIRECTION_CHANGE_THROTTLE_MS = 16;  // Max 60 direction changes/sec  
+const Uint32 CONNECTION_TIMEOUT_WARNING_MS = 15000;  // Warn after 15s
+const Uint32 CONNECTION_TIMEOUT_DISCONNECT_MS = 30000;  // Disconnect after 30s
 
 // Direction enum
 enum class Direction {

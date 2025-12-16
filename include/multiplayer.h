@@ -109,12 +109,16 @@ struct NetworkContext {
     MultiplayerApi* api;
     std::string sessionId;
     std::string myClientId;  // My client ID from API
+    std::string hostClientId;  // ClientId of the session host (for host disconnect detection)
     bool isHost;  // True if this client is hosting the session
     NetworkMessageQueue messageQueue;  // Thread-safe queue for network events
     std::vector<std::string> availableSessions;
     Uint32 lastStateSyncSent;  // Host: last time full state was broadcast
+    Uint32 lastMessageReceived;  // Last time we received any message from server
+    Uint32 connectionWarningTime;  // Time when we first detected connection issue
     
-    NetworkContext() : api(nullptr), isHost(false), lastStateSyncSent(0) {}
+    NetworkContext() : api(nullptr), isHost(false), lastStateSyncSent(0),
+                       lastMessageReceived(0), connectionWarningTime(0) {}
 };
 
 // Match timing and state management

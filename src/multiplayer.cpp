@@ -56,6 +56,9 @@ bool NetworkManager::initialize(const std::string& host, int port) {
         return false;
     }
     
+    // Initialize connection timing
+    ctx->network.lastMessageReceived = SDL_GetTicks();
+    
     // Set up event listener
     mp_api_listen(ctx->network.api, on_multiplayer_event, ctx);
     std::cout << "Network initialized: " << host << ":" << port << std::endl;
@@ -68,7 +71,10 @@ void NetworkManager::shutdown() {
         ctx->network.api = nullptr;
         ctx->network.sessionId.clear();
         ctx->network.myClientId.clear();
+        ctx->network.hostClientId.clear();
         ctx->network.isHost = false;
+        ctx->network.lastMessageReceived = 0;
+        ctx->network.connectionWarningTime = 0;
     }
 }
 
@@ -221,7 +227,33 @@ const std::string& NetworkManager::getMyClientId() const {
 }
 
 void NetworkManager::processMessages() {
+    if (!ctx || !ctx->network.api)
+        return;
+    
     processNetworkMessages(*ctx);
+    
+    // Check for connection timeout (30 seconds without any message)
+    if (ctx->network.lastMessageReceived > 0) {
+        Uint32 currentTime = SDL_GetTicks();
+        Uint32 timeSinceLastMessage = currentTime - ctx->network.lastMessageReceived;
+        
+        if (timeSinceLastMessage > CONNECTION_TIMEOUT_DISCONNECT_MS) {
+            std::cerr << "Connection timeout! No messages for " << (timeSinceLastMessage / 1000) << " seconds" << std::endl;
+            std::cerr << "Disconnecting and returning to menu..." << std::endl;
+            
+            // Trigger disconnect
+            if (ctx->onStateChange) {
+                ctx->onStateChange(static_cast<int>(GameState::MENU));
+            }
+            shutdown();
+        } else if (timeSinceLastMessage > CONNECTION_TIMEOUT_WARNING_MS && ctx->network.connectionWarningTime == 0) {
+            ctx->network.connectionWarningTime = currentTime;
+            std::cout << "Warning: No messages received for " << (timeSinceLastMessage / 1000) << " seconds" << std::endl;
+        } else if (timeSinceLastMessage < CONNECTION_TIMEOUT_WARNING_MS) {
+            // Reset warning if connection recovered
+            ctx->network.connectionWarningTime = 0;
+        }
+    }
 }
 
 void NetworkManager::sendPlayerUpdate(int playerIndex) {
@@ -253,19 +285,11 @@ static void on_multiplayer_event( const char *event, int64_t messageId, const ch
         msg.jsonData = "";  // No data for left event
         
         // Check if host left (critical for clients)
-        if (ctx->network.isHost == false) {
-            // Find if this was the host
-            bool wasHost = false;
-            for (int i = 0; i < 4; i++) {
-                if (ctx->players.players[i].active && 
-                    ctx->players.players[i].clientId == msg.clientId &&
-                    i == 0) {  // First player is typically host
-                    wasHost = true;
-                    break;
-                }
-            }
-            if (wasHost) {
+        if (ctx->network.isHost == false && !ctx->network.hostClientId.empty()) {
+            // Check if the leaving player is the host
+            if (msg.clientId == ctx->network.hostClientId) {
                 msg.type = NetworkMessageType::HOST_DISCONNECT;
+                std::cout << "Host disconnected: " << msg.clientId << std::endl;
             }
         }
         
@@ -291,6 +315,11 @@ static void on_multiplayer_event( const char *event, int64_t messageId, const ch
 static void processNetworkMessages(GameContext& ctx)
 {
     NetworkMessage msg;
+    
+    // Update last message received time if we have messages
+    if (ctx.network.messageQueue.size() > 0) {
+        ctx.network.lastMessageReceived = SDL_GetTicks();
+    }
     
     // Process all queued messages
     while (ctx.network.messageQueue.pop(msg)) {
@@ -346,8 +375,20 @@ static void handlePlayerJoined(GameContext& ctx, const std::string& clientId)
         add_player(ctx, clientId);
         ctx.players.myPlayerIndex = find_player_by_client_id(ctx, clientId);
         std::cout << "I joined as player " << (ctx.players.myPlayerIndex + 1) << std::endl;
+        
+        // If I'm the first player and not explicitly host, I'm likely the host
+        // (Server makes first joiner the host)
+        if (ctx.players.myPlayerIndex == 0 && !ctx.network.isHost) {
+            ctx.network.hostClientId = clientId;
+            std::cout << "Detected as session host (first player)" << std::endl;
+        }
     } else {
         // Someone else joined - add them
+        // If this is the first player joining and we don't know the host yet, they're likely the host
+        if (ctx.network.hostClientId.empty() && ctx.players.players[0].active == false) {
+            ctx.network.hostClientId = clientId;
+            std::cout << "Detected host: " << clientId << std::endl;
+        }
         add_player(ctx, clientId);
         std::cout << "Player joined: " << clientId << std::endl;
     }
@@ -555,15 +596,9 @@ static void sendPlayerUpdate(GameContext& ctx, int playerIndex)
     if (ctx.network.sessionId.empty() || !ctx.network.api)
         return;
     
-    // Light throttle to avoid overwhelming network thread (send max 30/sec)
-    Uint32 currentTime = SDL_GetTicks();
-    if (currentTime - ctx.players.players[playerIndex].lastMpSent < 33) {
-        return;
-    }
-    
-    // Send the update
+    // Send the update (no throttle - game tick rate naturally limits frequency)
     send_game_state(ctx, *ctx.players.players[playerIndex].snake);
-    ctx.players.players[playerIndex].lastMpSent = currentTime;
+    ctx.players.players[playerIndex].lastMpSent = SDL_GetTicks();
 }
 
 void NetworkManager::sendGameMessage(json_t* message)

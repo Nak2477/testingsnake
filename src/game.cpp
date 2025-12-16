@@ -425,19 +425,40 @@ void Game::handlePlayingInput(SDL_Keycode key)
     {
         case SDLK_UP:
             mySnake->setDirection(Direction::UP);
-            networkManager->sendPlayerUpdate(ctx.players.myPlayerIndex);
+            // Throttle direction changes to 60 Hz max (prevents network spam)
+            if (networkManager->isConnected()) {
+                Uint32 currentTime = SDL_GetTicks();
+                if (currentTime - ctx.players.players[ctx.players.myPlayerIndex].lastMpSent >= DIRECTION_CHANGE_THROTTLE_MS) {
+                    networkManager->sendPlayerUpdate(ctx.players.myPlayerIndex);
+                }
+            }
             break;
         case SDLK_DOWN:
             mySnake->setDirection(Direction::DOWN);
-            networkManager->sendPlayerUpdate(ctx.players.myPlayerIndex);
+            if (networkManager->isConnected()) {
+                Uint32 currentTime = SDL_GetTicks();
+                if (currentTime - ctx.players.players[ctx.players.myPlayerIndex].lastMpSent >= DIRECTION_CHANGE_THROTTLE_MS) {
+                    networkManager->sendPlayerUpdate(ctx.players.myPlayerIndex);
+                }
+            }
             break;
         case SDLK_LEFT:
             mySnake->setDirection(Direction::LEFT);
-            networkManager->sendPlayerUpdate(ctx.players.myPlayerIndex);
+            if (networkManager->isConnected()) {
+                Uint32 currentTime = SDL_GetTicks();
+                if (currentTime - ctx.players.players[ctx.players.myPlayerIndex].lastMpSent >= DIRECTION_CHANGE_THROTTLE_MS) {
+                    networkManager->sendPlayerUpdate(ctx.players.myPlayerIndex);
+                }
+            }
             break;
         case SDLK_RIGHT:
             mySnake->setDirection(Direction::RIGHT);
-            networkManager->sendPlayerUpdate(ctx.players.myPlayerIndex);
+            if (networkManager->isConnected()) {
+                Uint32 currentTime = SDL_GetTicks();
+                if (currentTime - ctx.players.players[ctx.players.myPlayerIndex].lastMpSent >= DIRECTION_CHANGE_THROTTLE_MS) {
+                    networkManager->sendPlayerUpdate(ctx.players.myPlayerIndex);
+                }
+            }
             break;
         case SDLK_p:
         case SDLK_ESCAPE:
@@ -667,9 +688,26 @@ void Game::updatePlayers()
 
 void Game::respawnPlayer(int playerIndex)
 {
+    // Find collision-free position (similar to food spawning logic)
     Position randomPos;
-    randomPos.x = rand() % GRID_WIDTH;
-    randomPos.y = rand() % GRID_HEIGHT;
+    const int MAX_ATTEMPTS = 1000;
+    int attempts = 0;
+    
+    // Rebuild collision map to check for safe spawn
+    buildCollisionMap();
+    
+    do {
+        randomPos.x = rand() % GRID_WIDTH;
+        randomPos.y = rand() % GRID_HEIGHT;
+        int key = randomPos.y * GRID_WIDTH + randomPos.x;
+        
+        // Check if position is free
+        if (occupiedPositions.count(key) == 0) {
+            break;
+        }
+        attempts++;
+    } while (attempts < MAX_ATTEMPTS);
+    
     ctx.players.players[playerIndex].snake->reset(randomPos);
     
     // Send multiplayer update for local player respawn
