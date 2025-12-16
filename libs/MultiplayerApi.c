@@ -86,12 +86,15 @@ void mp_api_destroy(MultiplayerApi *api) {
     if (!api) return;
 
     if (api->recv_thread_started && api->sockfd >= 0) {
+        fprintf(stderr, "[MultiplayerApi] Shutting down socket (fd=%d)...\n", api->sockfd);
         shutdown(api->sockfd, SHUT_RDWR);
         pthread_join(api->recv_thread, NULL);
     }
 
     if (api->sockfd >= 0) {
         close(api->sockfd);
+        fprintf(stderr, "[MultiplayerApi] Socket closed (fd=%d)\n", api->sockfd);
+        api->sockfd = -1;
     }
 
     pthread_mutex_lock(&api->lock);

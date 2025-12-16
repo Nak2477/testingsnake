@@ -19,7 +19,11 @@ Game::Game()
     
     // Set up type-safe callback for state changes from network
     ctx.onStateChange = [this](int newStateInt) {
-        this->state = static_cast<GameState>(newStateInt);
+        GameState newState = static_cast<GameState>(newStateInt);
+        // Use changeState to properly handle enter/exit transitions
+        if (this->state != newState) {
+            this->changeState(newState);
+        }
     };
     
     // Initialize network manager
@@ -464,7 +468,7 @@ void Game::handlePausedInput(SDL_Keycode key)
                     changeState(GameState::PLAYING);
                     break;
                 case 1: // Restart
-                    if (networkManager->isHost()) {
+                    if (!networkManager->isConnected() ||networkManager->isHost()) {
                         resetMatch();
                     }
                     break;
@@ -685,7 +689,7 @@ void Game::resetMatch()
             ctx.players.players[i].snake->setScore(0); // Reset score to 0 for clean restart
         }
     }
-    state = GameState::PLAYING;
+    
     ctx.match.winnerIndex = -1;
     ctx.match.matchStartTime = SDL_GetTicks();
     ctx.match.totalPausedTime = 0;
@@ -694,6 +698,10 @@ void Game::resetMatch()
     buildCollisionMap();  // Rebuild collision map with reset snake positions
     food.spawn(occupiedPositions);
     updateInterval = INITIAL_SPEED;
+    
+    // Use changeState to properly set input handler
+    changeState(GameState::PLAYING);
+    
     std::cout << "Game reset!" << std::endl;
 }
 
