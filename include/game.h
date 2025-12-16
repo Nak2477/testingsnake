@@ -49,11 +49,9 @@ class Game {
         void resetMatch();
         bool canUnpause() const;
         // Helpers
-        bool isPlayerValid(int index) const { return ctx.players[index].active && ctx.players[index].snake; }
+        bool isPlayerValid(int index) const { return ctx.players.players[index].active && ctx.players.players[index].snake; }
         void buildCollisionMap();
         void resetGameState();
-
- 
 
 private:
 
@@ -63,6 +61,7 @@ private:
 
     // Game state
     GameContext ctx;
+    std::unique_ptr<INetworkManager> networkManager;  // Network abstraction
     Food food;
     std::unordered_map<int, bool> occupiedPositions;
     GameState state;

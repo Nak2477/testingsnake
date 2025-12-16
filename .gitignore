@@ -3,3 +3,5 @@ test_main
 *.o
 *.a
 *.so
+IMPROVEMENTS.md
+REFACTORING_PHASE1.md

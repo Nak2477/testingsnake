@@ -142,13 +142,25 @@ Food::Food() : color{255, 0, 0, 255}
 void Food::spawn(const std::unordered_map<int, bool>& occupiedPositions)
 {
     bool validPosition = false;
+    int attempts = 0;
+    const int MAX_ATTEMPTS = 1000;  // Prevent infinite loop
     
-    while (!validPosition)
+    while (!validPosition && attempts < MAX_ATTEMPTS)
     {
         pos.x = std::rand() % GRID_WIDTH;
         pos.y = std::rand() % GRID_HEIGHT;
         
         int key = pos.y * GRID_WIDTH + pos.x;
         validPosition = (occupiedPositions.count(key) == 0);  // O(1) lookup!
+        attempts++;
+    }
+    
+    // Fallback: If we couldn't find a spot (grid is nearly full), 
+    // just place it at a random location anyway
+    if (!validPosition) {
+        std::cerr << "WARNING: Could not find empty spot for food after " 
+                  << MAX_ATTEMPTS << " attempts. Grid may be full." << std::endl;
+        pos.x = std::rand() % GRID_WIDTH;
+        pos.y = std::rand() % GRID_HEIGHT;
     }
 }

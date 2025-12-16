@@ -130,24 +130,24 @@ void GameRender::renderGame(const GameContext& ctx, bool matchEnded)
     
     // gameState game elements
     renderGrid();
-    renderPlayers(ctx.players);
+    renderPlayers(ctx.players.players);
     renderFood(*ctx.food);
     
     // Calculate score and remaining time for HUD
     int myScore = 0;
-    if (ctx.myPlayerIndex >= 0 && ctx.players[ctx.myPlayerIndex].snake) {
-        myScore = ctx.players[ctx.myPlayerIndex].snake->getScore();
+    if (ctx.players.myPlayerIndex >= 0 && ctx.players.players[ctx.players.myPlayerIndex].snake) {
+        myScore = ctx.players.players[ctx.players.myPlayerIndex].snake->getScore();
     }
     
     int remainingSeconds = 0;
     if (!matchEnded)
     {
         // Use synced elapsed time from host (updated every second)
-        Uint32 elapsedSeconds = ctx.syncedElapsedMs / 1000;
+        Uint32 elapsedSeconds = ctx.match.syncedElapsedMs / 1000;
         remainingSeconds = MATCH_DURATION_SECONDS - elapsedSeconds;
     }
     
-    renderHUD(myScore, remainingSeconds, ctx.sessionId);
+    renderHUD(myScore, remainingSeconds, ctx.network.sessionId);
 }
 
 void GameRender::present()
