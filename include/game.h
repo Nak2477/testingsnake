@@ -72,6 +72,7 @@ private:
     int updateInterval;
     int menuSelection;
     int pauseMenuSelection;
+    int sessionSelection;  // Selected session index for multiplayer
 
     void (Game::*inputHandler)(SDL_Keycode);
 

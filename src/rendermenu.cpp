@@ -181,6 +181,67 @@ void MenuRender::renderMenu(int menuSelection)
         renderCachedText("Use Arrow Keys/WASD  -  Enter to Select", WINDOW_WIDTH / 2 - 240, WINDOW_HEIGHT - 60, {150, 150, 150, 255});
 }
 
+void MenuRender::renderSessionBrowser(const std::vector<std::string>& sessions, int selectedIndex, bool isConnected)
+{
+    // Title
+    renderCachedText("MULTIPLAYER - SESSION BROWSER", WINDOW_WIDTH / 2 - 270, 50, {0, 255, 0, 255}, titleFont);
+    
+    if (!isConnected) {
+        renderText("Connecting to server...", WINDOW_WIDTH / 2 - 150, WINDOW_HEIGHT / 2 - 50, {255, 255, 0, 255});
+        renderText("Press ESC to return", WINDOW_WIDTH / 2 - 120, WINDOW_HEIGHT / 2 + 50, {200, 200, 200, 255});
+        SDL_RenderPresent(renderer);
+        return;
+    }
+    
+    // Instructions
+    renderText("H - Host Session   |   L - List Sessions   |   ESC - Back", 30, 120, {200, 200, 200, 255});
+    
+    if (sessions.empty()) {
+        renderText("No sessions available", WINDOW_WIDTH / 2 - 150, WINDOW_HEIGHT / 2 - 50, {255, 255, 0, 255});
+        renderText("Press H to host a new session", WINDOW_WIDTH / 2 - 170, WINDOW_HEIGHT / 2, {200, 200, 200, 255});
+        renderText("Press L to refresh list", WINDOW_WIDTH / 2 - 140, WINDOW_HEIGHT / 2 + 50, {200, 200, 200, 255});
+    } else {
+        // Instructions for selection
+        renderText("Use UP/DOWN arrows to select, ENTER to join", WINDOW_WIDTH / 2 - 250, 170, {150, 150, 150, 255});
+        
+        // Display sessions (max 10 visible at a time)
+        int startY = 220;
+        int spacing = 45;
+        int maxVisible = 10;
+        int startIdx = std::max(0, selectedIndex - maxVisible / 2);
+        int endIdx = std::min((int)sessions.size(), startIdx + maxVisible);
+        
+        // Adjust start if near end
+        if (endIdx - startIdx < maxVisible && sessions.size() >= maxVisible) {
+            startIdx = endIdx - maxVisible;
+        }
+        
+        for (int i = startIdx; i < endIdx; i++) {
+            SDL_Color color = (i == selectedIndex) ? SDL_Color{255, 255, 0, 255} : SDL_Color{150, 150, 150, 255};
+            
+            // Draw selection indicator
+            if (i == selectedIndex) {
+                renderText(">", 80, startY + (i - startIdx) * spacing, {255, 255, 0, 255});
+            }
+            
+            // Session number and ID
+            char sessionText[128];
+            snprintf(sessionText, sizeof(sessionText), "[%d] %s", i + 1, sessions[i].c_str());
+            renderText(sessionText, 120, startY + (i - startIdx) * spacing, color);
+        }
+        
+        // Show scroll indicator if needed
+        if (sessions.size() > maxVisible) {
+            char scrollInfo[64];
+            snprintf(scrollInfo, sizeof(scrollInfo), "Showing %d-%d of %d sessions", 
+                    startIdx + 1, endIdx, (int)sessions.size());
+            renderText(scrollInfo, WINDOW_WIDTH / 2 - 120, startY + maxVisible * spacing + 20, {100, 100, 100, 255});
+        }
+    }
+    
+    SDL_RenderPresent(renderer);
+}
+
 void MenuRender::renderLobby(const std::array<PlayerSlot, 4>& players, bool isHost)
 {
     // Draw title
