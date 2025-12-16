@@ -9,8 +9,6 @@ static void on_multiplayer_event(const char *event, int64_t messageId, const cha
 static void processNetworkMessages(GameContext& ctx);
 static void handlePlayerJoined(GameContext& ctx, const std::string& clientId);
 static void handlePlayerLeft(GameContext& ctx, const std::string& clientId);
-static void handleSyncRequest(GameContext& ctx, const std::string& clientId, json_t* data);
-static void handleHeartbeat(GameContext& ctx, const std::string& clientId, json_t* data);
 static void handleStateSync(GameContext& ctx, json_t* data);
 static void handlePlayerUpdate(GameContext& ctx, const std::string& clientId, json_t* data);
 static void send_game_state(GameContext& ctx, const Snake& snake);
@@ -21,7 +19,6 @@ static int find_player_by_client_id(const GameContext& ctx, const std::string& c
 static void update_remote_player(GameContext& ctx, const std::string& clientId, json_t* data);
 static void remove_player(GameContext& ctx, const std::string& clientId);
 static void sendFullStateSync(GameContext& ctx);
-static void handleSyncRequest(GameContext& ctx, const std::string& requesterId);
 static void handleHostDisconnect(GameContext& ctx);
 
 // ========== CONSTANTS ==========
@@ -105,7 +102,6 @@ bool NetworkManager::hostSession() {
     ctx->network.myClientId = clientId;
     ctx->network.isHost = true;
     ctx->network.lastStateSyncSent = SDL_GetTicks();
-    ctx->network.lastHeartbeatSent = SDL_GetTicks();
     
     std::cout << "Hosting session: " << session << " (clientId: " << clientId << ")" << std::endl;
     
@@ -191,8 +187,6 @@ bool NetworkManager::joinSession(const std::string& sessionId) {
     ctx->network.sessionId = joinedSession;
     ctx->network.myClientId = joinedClientId;
     ctx->network.isHost = false;
-    ctx->network.lastStateSyncReceived = SDL_GetTicks();
-    ctx->network.lastHeartbeatSent = SDL_GetTicks();
     
     std::cout << "Joined session: " << joinedSession << " (clientId: " << joinedClientId << ")" << std::endl;
     
@@ -272,7 +266,6 @@ static void on_multiplayer_event( const char *event, int64_t messageId, const ch
             }
             if (wasHost) {
                 msg.type = NetworkMessageType::HOST_DISCONNECT;
-                ctx->network.hostDisconnected = true;
             }
         }
         
@@ -327,11 +320,7 @@ static void processNetworkMessages(GameContext& ctx)
                 json_t *type_val = json_object_get(data, "type");
                 const char* messageType = json_is_string(type_val) ? json_string_value(type_val) : "";
                 
-                if (strcmp(messageType, "sync_request") == 0) {
-                    handleSyncRequest(ctx, msg.clientId, data);
-                } else if (strcmp(messageType, "heartbeat") == 0) {
-                    handleHeartbeat(ctx, msg.clientId, data);
-                } else if (strcmp(messageType, "state_sync") == 0) {
+                if (strcmp(messageType, "state_sync") == 0) {
                     handleStateSync(ctx, data);
                 } else if (msg.clientId != ctx.network.myClientId) {
                     handlePlayerUpdate(ctx, msg.clientId, data);
@@ -389,25 +378,9 @@ static void handlePlayerLeft(GameContext& ctx, const std::string& clientId)
     remove_player(ctx, clientId);
 }
 
-static void handleSyncRequest(GameContext& ctx, const std::string& clientId, json_t* data)
-{
-    // Client is requesting full state sync
-    if (ctx.network.isHost) {
-        handleSyncRequest(ctx, clientId);
-    }
-}
-
-static void handleHeartbeat(GameContext& ctx, const std::string& clientId, json_t* data)
-{
-    // Received heartbeat - update last seen time
-    // (Currently just acknowledged, could track per-player timing)
-}
-
 static void handleStateSync(GameContext& ctx, json_t* data)
 {
     // Sync game state from host
-    ctx.network.lastStateSyncReceived = SDL_GetTicks();  // Track for desync detection
-    
     // Sync food position
     json_t *foodX = json_object_get(data, "foodX");
     json_t *foodY = json_object_get(data, "foodY");
@@ -783,14 +756,6 @@ static void sendFullStateSync(GameContext& ctx)
     std::cout << "Sent periodic full state sync" << std::endl;
 }
 
-static void handleSyncRequest(GameContext& ctx, const std::string& requesterId)
-{
-    if (!ctx.network.isHost) return;
-    
-    std::cout << "Received sync request from " << requesterId << ", sending full state" << std::endl;
-    sendFullStateSync(ctx);
-}
-
 static void handleHostDisconnect(GameContext& ctx)
 {
     std::cout << "========================================" << std::endl;
@@ -814,54 +779,5 @@ void NetworkManager::sendPeriodicStateSync()
     // Send full state every 5 seconds
     if (currentTime - ctx->network.lastStateSyncSent >= 5000) {
         sendFullStateSync(*ctx);
-    }
-}
-
-void NetworkManager::requestStateSync()
-{
-    if (!ctx || !ctx->network.api || ctx->network.sessionId.empty() || ctx->network.isHost)
-        return;
-    
-    // Check if we haven't received sync in a while (10 seconds)
-    Uint32 currentTime = SDL_GetTicks();
-    if (currentTime - ctx->network.lastStateSyncReceived >= 10000) {
-        JsonPtr request(json_object());
-        json_object_set_new(request.get(), "type", json_string("sync_request"));
-        
-        mp_api_game(ctx->network.api, request.get());
-        std::cout << "Requesting state sync from host..." << std::endl;
-        
-        // Reset timer to avoid spam
-        ctx->network.lastStateSyncReceived = currentTime;
-    }
-}
-
-void NetworkManager::sendHeartbeat()
-{
-    if (!ctx || !ctx->network.api || ctx->network.sessionId.empty())
-        return;
-    
-    Uint32 currentTime = SDL_GetTicks();
-    // Send heartbeat every 3 seconds
-    if (currentTime - ctx->network.lastHeartbeatSent >= 3000) {
-        JsonPtr heartbeat(json_object());
-        json_object_set_new(heartbeat.get(), "type", json_string("heartbeat"));
-        json_object_set_new(heartbeat.get(), "timestamp", json_integer(currentTime));
-        
-        mp_api_game(ctx->network.api, heartbeat.get());
-        ctx->network.lastHeartbeatSent = currentTime;
-    }
-}
-
-void NetworkManager::checkHostConnection()
-{
-    if (!ctx || ctx->network.isHost) return;
-    
-    // Check if we've received any state sync recently
-    Uint32 currentTime = SDL_GetTicks();
-    if (ctx->network.lastStateSyncReceived > 0 && 
-        currentTime - ctx->network.lastStateSyncReceived >= 15000) {
-        // No sync for 15 seconds - host may be dead
-        std::cerr << "WARNING: No state sync from host for 15+ seconds. Host may have disconnected." << std::endl;
     }
 }

@@ -99,14 +99,10 @@ void Game::update()
     if (networkManager && networkManager->isConnected()) {
         networkManager->processMessages();
         
-        // CRITICAL FIX: Periodic state sync and heartbeat
+        // CRITICAL FIX: Periodic state sync from host
         if (networkManager->isHost()) {
             networkManager->sendPeriodicStateSync();  // Every 5 seconds
-        } else {
-            networkManager->requestStateSync();  // Request if desync detected
-            networkManager->checkHostConnection();  // Check if host is alive
         }
-        networkManager->sendHeartbeat();  // All clients send heartbeat
     }
     
     // Only update game logic when playing or paused

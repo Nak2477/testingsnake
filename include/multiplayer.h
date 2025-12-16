@@ -113,13 +113,8 @@ struct NetworkContext {
     NetworkMessageQueue messageQueue;  // Thread-safe queue for network events
     std::vector<std::string> availableSessions;
     Uint32 lastStateSyncSent;  // Host: last time full state was broadcast
-    Uint32 lastStateSyncReceived;  // Client: last time we received state from host
-    Uint32 lastHeartbeatSent;  // Last heartbeat sent
-    bool hostDisconnected;  // Flag if host has disconnected
     
-    NetworkContext() : api(nullptr), isHost(false), lastStateSyncSent(0), 
-                       lastStateSyncReceived(0), lastHeartbeatSent(0), 
-                       hostDisconnected(false) {}
+    NetworkContext() : api(nullptr), isHost(false), lastStateSyncSent(0) {}
 };
 
 // Match timing and state management
@@ -191,9 +186,6 @@ public:
     
     // New methods for critical fixes
     virtual void sendPeriodicStateSync() = 0;  // Host: periodic full state broadcast
-    virtual void requestStateSync() = 0;  // Client: request sync from host
-    virtual void sendHeartbeat() = 0;  // Send keepalive heartbeat
-    virtual void checkHostConnection() = 0;  // Check if host is still alive
     
     // Access to internal context (for gradual migration)
     virtual NetworkContext& getNetworkContext() = 0;
@@ -232,9 +224,6 @@ public:
     
     // New methods for critical fixes
     void sendPeriodicStateSync();  // Host: periodic full state broadcast
-    void requestStateSync();  // Client: request sync from host
-    void sendHeartbeat();  // Send keepalive heartbeat
-    void checkHostConnection();  // Check if host is still alive
     
     NetworkContext& getNetworkContext() override { return ctx->network; }
     const NetworkContext& getNetworkContext() const override { return ctx->network; }
