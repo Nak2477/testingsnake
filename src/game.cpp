@@ -14,6 +14,7 @@ Game::Game()
     ctx.food = &food;
     ctx.isHost = false;
     ctx.matchStartTime = 0;
+    ctx.syncedElapsedMs = 0;
     ctx.winnerIndex = -1;
     ctx.totalPausedTime = 0;
     ctx.pauseStartTime = 0;
@@ -226,17 +227,33 @@ void Game::enterState(GameState newState)
             break;
             
         case GameState::PLAYING:
-            // Start match if coming from lobby
-            if (state == GameState::LOBBY && ctx.isHost) {
-                matchStartTime = SDL_GetTicks();
-                ctx.matchStartTime = matchStartTime;
-                if (ctx.api) {
-                    json_t *startUpdate = json_object();
-                    json_object_set_new(startUpdate, "type", json_string("state_sync"));
-                    json_object_set_new(startUpdate, "gameState", json_string("PLAYING"));
-                    json_object_set_new(startUpdate, "matchStartTime", json_integer(ctx.matchStartTime));
-                    mp_api_game(ctx.api, startUpdate);
-                    json_decref(startUpdate);
+            // Start match if coming from lobby (multiplayer)
+            if (state == GameState::LOBBY) {
+                // DON'T reset positions - they're already set when players joined
+                // Just initialize timing
+                if (ctx.isHost) {
+                    matchStartTime = SDL_GetTicks();
+                    ctx.matchStartTime = matchStartTime;
+                    ctx.syncedElapsedMs = 0;
+                    
+                    // Spawn food for multiplayer match
+                    buildCollisionMap();
+                    food.spawn(occupiedPositions);
+                    
+                    // Broadcast game start with food position
+                    if (ctx.api) {
+                        json_t *startUpdate = json_object();
+                        json_object_set_new(startUpdate, "type", json_string("state_sync"));
+                        json_object_set_new(startUpdate, "gameState", json_string("PLAYING"));
+                        json_object_set_new(startUpdate, "matchStartTime", json_integer(ctx.matchStartTime));
+                        json_object_set_new(startUpdate, "foodX", json_integer(food.getPosition().x));
+                        json_object_set_new(startUpdate, "foodY", json_integer(food.getPosition().y));
+                        mp_api_game(ctx.api, startUpdate);
+                        json_decref(startUpdate);
+                    }
+                } else {
+                    // Client initializes to 0, will be synced by host
+                    ctx.syncedElapsedMs = 0;
                 }
             }
             inputHandler = &Game::handlePlayingInput;
@@ -444,12 +461,20 @@ void Game::checkMatchTimer(Uint32 currentTime)
     // Calculate elapsed time, subtracting paused time
     Uint32 currentPausedTime = ctx.totalPausedTime;
     if (state == GameState::PAUSED && ctx.pauseStartTime > 0) {
-        // Add current pause duration to total
         currentPausedTime += (currentTime - ctx.pauseStartTime);
     }
     
     Uint32 elapsedSeconds = (currentTime - matchStart - currentPausedTime) / 1000;
-    if (elapsedSeconds >= MATCH_DURATION_SECONDS) {
+    
+    // Only host checks for match end and broadcasts it
+    if (elapsedSeconds >= MATCH_DURATION_SECONDS && ctx.isHost && ctx.api) {
+        // Broadcast match end to all clients
+        json_t *endUpdate = json_object();
+        json_object_set_new(endUpdate, "type", json_string("state_sync"));
+        json_object_set_new(endUpdate, "gameState", json_string("MATCH_END"));
+        mp_api_game(ctx.api, endUpdate);
+        json_decref(endUpdate);
+        
         state = GameState::MATCH_END;
         
         // Find winner - longest snake
@@ -551,7 +576,7 @@ void Game::updatePlayers()
         Position newHead = ctx.players[i].snake->getHead();
         int newHeadKey = newHead.y * GRID_WIDTH + newHead.x;
         
-        // Send multiplayer update for local player (throttled)
+        // Send multiplayer update for local player
         sendPlayerUpdate(ctx, i);
         
         // Check ALL collisions with O(1) map lookup!

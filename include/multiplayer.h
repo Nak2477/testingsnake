@@ -21,6 +21,7 @@ struct GameContext {
     std::vector<std::string> availableSessions;
     Food* food;
     Uint32 matchStartTime;  // Synced from host
+    Uint32 syncedElapsedMs;  // Authoritative elapsed time from host
     int winnerIndex;  // Index of match winner, -1 if no winner
     std::string pausedByClientId;  // ClientId of player who paused, empty if not paused
     Uint32 totalPausedTime;  // Total accumulated time paused (milliseconds)

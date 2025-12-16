@@ -1,4 +1,5 @@
 #include "multiplayer.h"
+#include "game.h"
 #include <iostream>
 
 
@@ -8,9 +9,17 @@ void on_multiplayer_event( const char *event, int64_t messageId, const char *cli
     GameContext* ctx = (GameContext*)user_data;
 
     if (strcmp(event, "joined") == 0) {
-        std::string myClientId = (ctx->myPlayerIndex >= 0) ? ctx->players[ctx->myPlayerIndex].clientId : "";
-        if (clientId && std::string(clientId) != myClientId) {
+        if (clientId) {
+            // Add the player who joined
             add_player(*ctx, clientId);
+            
+            // If this is me joining, remember my slot
+            if (ctx->myPlayerIndex < 0) {
+                ctx->myPlayerIndex = find_player_by_client_id(*ctx, clientId);
+                if (ctx->myPlayerIndex >= 0) {
+                    std::cout << "I am player " << (ctx->myPlayerIndex + 1) << std::endl;
+                }
+            }
             
             // If we're the host, send current game state to new player
             if (ctx->isHost && ctx->food) {
@@ -64,13 +73,25 @@ void on_multiplayer_event( const char *event, int64_t messageId, const char *cli
                 json_t *gameStateVal = json_object_get(data, "gameState");
                 if (json_is_string(gameStateVal) && ctx->gameStatePtr) {
                     const char* stateStr = json_string_value(gameStateVal);
-                    int* statePtr = static_cast<int*>(ctx->gameStatePtr);
+                    GameState* statePtr = static_cast<GameState*>(ctx->gameStatePtr);
                     
                     if (strcmp(stateStr, "PLAYING") == 0) {
-                        *statePtr = 16;  // GameState::PLAYING
+                        *statePtr = GameState::PLAYING;
                         std::cout << "Host started the match!" << std::endl;
                     } else if (strcmp(stateStr, "LOBBY") == 0) {
-                        *statePtr = 4;   // GameState::LOBBY
+                        *statePtr = GameState::LOBBY;
+                    } else if (strcmp(stateStr, "MATCH_END") == 0) {
+                        *statePtr = GameState::MATCH_END;
+                        std::cout << "Match ended!" << std::endl;
+                    }
+                }
+                
+                // Receive authoritative time from host
+                json_t *timeSyncType = json_object_get(data, "type");
+                if (json_is_string(timeSyncType) && strcmp(json_string_value(timeSyncType), "time_sync") == 0) {
+                    json_t *elapsedVal = json_object_get(data, "elapsedMs");
+                    if (json_is_integer(elapsedVal)) {
+                        ctx->syncedElapsedMs = json_integer_value(elapsedVal);
                     }
                 }
                 
@@ -98,17 +119,14 @@ void on_multiplayer_event( const char *event, int64_t messageId, const char *cli
                         }
                     }
                     
-                    // Update game state (use enum value 6 for PAUSED, 16 for PLAYING)
+                    // Update game state using direct state modification
                     if (ctx->gameStatePtr) {
-                        int* statePtr = static_cast<int*>(ctx->gameStatePtr);
+                        GameState* statePtr = static_cast<GameState*>(ctx->gameStatePtr);
                         
                         if (isPaused) {
-                            *statePtr = 6;  // GameState::PAUSED
+                            *statePtr = GameState::PAUSED;
                         } else {
-                            // Only change to PLAYING if we're currently PAUSED
-                            if (*statePtr == 6) {
-                                *statePtr = 16;  // GameState::PLAYING
-                            }
+                            *statePtr = GameState::PLAYING;
                         }
                     }
                     
@@ -137,6 +155,7 @@ void on_multiplayer_event( const char *event, int64_t messageId, const char *cli
                     }
                 }
             } else if (std::string(clientId) != myClientId) {
+                std::cout << "Updating remote player: " << clientId << std::endl;
                 update_remote_player(*ctx, clientId, data);
             }
         }
@@ -210,9 +229,9 @@ void sendPlayerUpdate(GameContext& ctx, int playerIndex)
     if (ctx.sessionId.empty() || !ctx.api)
         return;
     
-    // Throttle to avoid network spam
+    // Light throttle to avoid overwhelming network thread (send max 30/sec)
     Uint32 currentTime = SDL_GetTicks();
-    if (currentTime - ctx.players[playerIndex].lastMpSent < 100) {
+    if (currentTime - ctx.players[playerIndex].lastMpSent < 33) {
         return;
     }
     
@@ -336,9 +355,8 @@ int multiplayer_join(GameContext& ctx, const char* sessionId)
 		ctx.isHost = false;  // Mark as non-host
 		printf("Ansluten till session: %s (clientId: %s)\n", joinedSession, joinedClientId);
 		
-		// Add myself as a player
-		add_player(ctx, joinedClientId);
-		ctx.myPlayerIndex = find_player_by_client_id(ctx, joinedClientId);
+		// DON'T add self - wait for "joined" event to learn slot from host
+		ctx.myPlayerIndex = -1;  // Will be set when we receive joined event
 		
 		/* joinData kan innehålla status eller annan info */
 		if (joinData) {
