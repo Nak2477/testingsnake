@@ -128,14 +128,8 @@ void Game::update()
         if (state == GameState::PLAYING) {
             // Normal game update - move snakes, check collisions
             updatePlayers();
-        } else if (state == GameState::PAUSED) {
-            // Paused - just send position update to keep session alive
-            if (ctx.players.myPlayerIndex >= 0 && 
-                ctx.players.players[ctx.players.myPlayerIndex].active && 
-                ctx.players.players[ctx.players.myPlayerIndex].snake) {
-                networkManager->sendPlayerUpdate(ctx.players.myPlayerIndex);
-            }
         }
+        // Note: Paused state doesn't send updates - relies on periodic state sync from host
     }
 }
 
@@ -431,15 +425,19 @@ void Game::handlePlayingInput(SDL_Keycode key)
     {
         case SDLK_UP:
             mySnake->setDirection(Direction::UP);
+            networkManager->sendPlayerUpdate(ctx.players.myPlayerIndex);
             break;
         case SDLK_DOWN:
             mySnake->setDirection(Direction::DOWN);
+            networkManager->sendPlayerUpdate(ctx.players.myPlayerIndex);
             break;
         case SDLK_LEFT:
             mySnake->setDirection(Direction::LEFT);
+            networkManager->sendPlayerUpdate(ctx.players.myPlayerIndex);
             break;
         case SDLK_RIGHT:
             mySnake->setDirection(Direction::RIGHT);
+            networkManager->sendPlayerUpdate(ctx.players.myPlayerIndex);
             break;
         case SDLK_p:
         case SDLK_ESCAPE:
@@ -608,6 +606,11 @@ void Game::updatePlayers()
             ctx.players.players[i].snake->grow();
             foodEaten = true;
             
+            // Send immediate update if this is the local player (show growth)
+            if (i == ctx.players.myPlayerIndex) {
+                networkManager->sendPlayerUpdate(i);
+            }
+            
             // Spawn new food (host spawns and broadcasts, singleplayer just spawns)
             buildCollisionMap();  // Rebuild with grown snake
             food.spawn(occupiedPositions);
@@ -707,10 +710,9 @@ void Game::resetMatch()
 
 bool Game::canUnpause() const
 {
-    if (!networkManager->isConnected()) return true;
-    if (ctx.players.myPlayerIndex < 0) return false;
-    return ctx.match.pausedByClientId.empty() || 
-           ctx.match.pausedByClientId == ctx.players.players[ctx.players.myPlayerIndex].clientId;
+    // Allow anyone to pause/unpause in multiplayer
+    // Host's authoritative timing keeps everything in sync
+    return true;
 }
 
 void Game::buildCollisionMap()
