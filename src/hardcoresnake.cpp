@@ -82,7 +82,7 @@ void Snake::grow()
     score += 10;
 }
 
-void Snake::reset(Position startPos)
+void Snake::reset(const Position& startPos)
 {
     body.clear();
     body.push_back(startPos);

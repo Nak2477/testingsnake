@@ -60,6 +60,20 @@ void on_multiplayer_event( const char *event, int64_t messageId, const char *cli
                     ctx->matchStartTime = json_integer_value(matchTime);
                 }
                 
+                // Receive game state change from host
+                json_t *gameStateVal = json_object_get(data, "gameState");
+                if (json_is_string(gameStateVal) && ctx->gameStatePtr) {
+                    const char* stateStr = json_string_value(gameStateVal);
+                    int* statePtr = static_cast<int*>(ctx->gameStatePtr);
+                    
+                    if (strcmp(stateStr, "PLAYING") == 0) {
+                        *statePtr = 16;  // GameState::PLAYING
+                        std::cout << "Host started the match!" << std::endl;
+                    } else if (strcmp(stateStr, "LOBBY") == 0) {
+                        *statePtr = 4;   // GameState::LOBBY
+                    }
+                }
+                
                 // Receive global pause command from any player
                 json_t *pausedVal = json_object_get(data, "globalPaused");
                 json_t *pausedBy = json_object_get(data, "pausedBy");

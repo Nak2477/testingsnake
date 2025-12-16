@@ -23,7 +23,7 @@ class MenuRender
         void renderMenu(int menuSelection);           // Main menu (MENU state)
         void renderLobby(const std::array<PlayerSlot, 4>& players, bool isHost);  // LOBBY state
         void renderCountdown(int seconds);            // COUNTDOWN state
-        void renderPauseMenu();                       // Pause overlay during PLAYING
+        void renderPauseMenu(int selection);         // Pause overlay during PLAYING
         void renderMatchEnd(int winnerIndex, const std::array<PlayerSlot, 4>& players);  // MATCH_END state
         
         SDL_Renderer* getRenderer() { return renderer; }

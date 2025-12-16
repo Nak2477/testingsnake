@@ -229,7 +229,7 @@ void MenuRender::renderCountdown(int seconds)
     renderText(text, WINDOW_WIDTH / 2 - 40, WINDOW_HEIGHT / 2 - 60, {0, 255, 0, 255}, titleFont);
 }
 
-void MenuRender::renderPauseMenu()
+void MenuRender::renderPauseMenu(int selection)
 {
     // Semi-transparent overlay
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
@@ -237,39 +237,20 @@ void MenuRender::renderPauseMenu()
     SDL_Rect overlay = {0, 0, WINDOW_WIDTH, WINDOW_HEIGHT};
     SDL_RenderFillRect(renderer, &overlay);
     
-    // Pause box
-    //SDL_Rect pauseBox = {WINDOW_WIDTH / 2 - 150, WINDOW_HEIGHT / 2 - 100, 300, 200};
-    //SDL_SetRenderDrawColor(renderer, 40, 40, 40, 255);
-    //SDL_RenderFillRect(renderer, &pauseBox);
-    //
-    //SDL_SetRenderDrawColor(renderer, 0, 255, 0, 255);
-    //SDL_RenderDrawRect(renderer, &pauseBox);
-    
-    // Title
-    SDL_Rect titleRect = {WINDOW_WIDTH / 2 - 80, WINDOW_HEIGHT / 2 - 70, 160, 40};
-    //SDL_SetRenderDrawColor(renderer, 0, 200, 0, 255);
-    SDL_RenderFillRect(renderer, &titleRect);
-    
-    // Options
-    SDL_SetRenderDrawColor(renderer, 60, 60, 60, 255);
-
-    SDL_Rect resumeRect = {WINDOW_WIDTH / 2 - 100, WINDOW_HEIGHT / 2, 200, 35};
-    SDL_RenderFillRect(renderer, &resumeRect);
-
-    SDL_Rect restartRect = {WINDOW_WIDTH / 2 - 100, WINDOW_HEIGHT / 2 + 50, 200, 35};
-    SDL_RenderFillRect(renderer, &restartRect);
-    
-    SDL_Rect menuRect = {WINDOW_WIDTH / 2 - 100, WINDOW_HEIGHT / 2 + 100, 200, 35};
-    SDL_RenderFillRect(renderer, &menuRect);
-    
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
 
     renderCachedText("PAUSED", WINDOW_WIDTH / 2 - 80, WINDOW_HEIGHT / 2 - 100, {0, 255, 0, 255}, titleFont);
     
-    renderCachedText("Resume", WINDOW_WIDTH / 2 - 50, WINDOW_HEIGHT / 2, {255, 215, 0, 255});
-    renderCachedText("Restart", WINDOW_WIDTH / 2 - 45, WINDOW_HEIGHT / 2 + 50, {255, 215, 0, 255});
-
-    renderCachedText("Menu", WINDOW_WIDTH / 2 - 35, WINDOW_HEIGHT / 2 + 100, {255, 215, 0, 255});
+    // Menu options with highlight
+    SDL_Color normalColor = {255, 215, 0, 255};
+    SDL_Color selectedColor = {0, 255, 0, 255};
+    
+    renderCachedText("Resume", WINDOW_WIDTH / 2 - 50, WINDOW_HEIGHT / 2, 
+                     selection == 0 ? selectedColor : normalColor);
+    renderCachedText("Restart", WINDOW_WIDTH / 2 - 45, WINDOW_HEIGHT / 2 + 50, 
+                     selection == 1 ? selectedColor : normalColor);
+    renderCachedText("Menu", WINDOW_WIDTH / 2 - 35, WINDOW_HEIGHT / 2 + 100, 
+                     selection == 2 ? selectedColor : normalColor);
 }
 
 void MenuRender::renderMatchEnd(int winnerIndex, const std::array<PlayerSlot, 4>& players)

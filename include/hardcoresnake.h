@@ -57,7 +57,7 @@ public:
     void setDirection(Direction dir);
     void update();
     void grow();
-    void reset(Position startPos);
+    void reset(const Position& startPos);
 
     bool checkCollision(const Position& pos) const;
     bool checkSelfCollision() const;
