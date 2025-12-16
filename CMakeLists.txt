@@ -60,7 +60,6 @@ target_link_libraries(multiplayer_api
     curl
     pthread
     m
-    bsd
 )
 
 # Snake game C++ sources
