@@ -1,31 +1,36 @@
-#ifndef GAME_RENDERER_H
-#define GAME_RENDERER_H
+#ifndef RENDERGAME_H
+#define RENDERGAME_H
 
 #include "hardcoresnake.h"
 #include "rendermenu.h"
 #include <array>
 #include <string>
 
-class GameRenderer {
+// Forward declaration
+struct GameContext;
+
+class GameRender {
 private:
     SDL_Renderer* renderer;
-    MenuRenderer* ui;
+    MenuRender* ui;
     SDL_Texture* gridTexture;
 public:
-    GameRenderer(SDL_Renderer* renderer, MenuRenderer* ui);
-    ~GameRenderer();
+    GameRender(SDL_Renderer* renderer, MenuRender* ui);
+    ~GameRender();
 
     void renderGrid();
     void renderPlayers(const std::array<PlayerSlot, 4>& players);
     void renderFood(const Food& food);
     void renderHUD(int score, int remainingSeconds, const std::string& sessionId);
-    void renderMatchEnd(int winnerIndex, const std::array<PlayerSlot, 4>& players);
-    void renderPauseMenu();
     void clearScreen();
+    
+    // High-level rendering
+    void renderGame(const GameContext& ctx, bool matchEnded, Uint32 matchStartTime);
+    void present();
 
 private:
     void createGridTexture();
     
 };
 
-#endif // GAME_RENDERER_H
+#endif // RENDERGAME_H

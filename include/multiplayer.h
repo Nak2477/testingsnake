@@ -5,7 +5,7 @@
 #include <vector>
 #include <memory>
 #include <array>
-#include "rendergame.h"
+#include "hardcoresnake.h"
 
 extern "C" {
     #include "../libs/MultiplayerApi.h"
@@ -21,13 +21,20 @@ struct GameContext {
     std::vector<std::string> availableSessions;
     Food* food;
     Uint32 matchStartTime;  // Synced from host
+    int winnerIndex;  // Index of match winner, -1 if no winner
+    std::string pausedByClientId;  // ClientId of player who paused, empty if not paused
+    Uint32 totalPausedTime;  // Total accumulated time paused (milliseconds)
+    Uint32 pauseStartTime;  // When current pause started (0 if not paused)
+    void* gameStatePtr;  // Pointer to Game's state (as void* to avoid circular dependency)
 };
 
 // Forward declarations
 
+void initMultiplayerConnection(GameContext& ctx);
 void on_multiplayer_event( const char *event, int64_t messageId, const char *clientId, json_t *data, void *user_data);
 void send_game_state(GameContext& ctx, const Snake& snake);
 void sendPlayerUpdate(GameContext& ctx, int playerIndex);
+void sendGlobalPauseState(GameContext& ctx, bool paused, const std::string& pauserClientId);
 
 int multiplayer_host(GameContext& ctx);
 int multiplayer_list(GameContext& ctx);

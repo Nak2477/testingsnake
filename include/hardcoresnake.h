@@ -7,8 +7,8 @@
 #include <algorithm>
 #include <iostream>
 #include <deque>
-#include <vector>
 #include <memory>
+#include <unordered_map>
 
 // Game constants
 const int WINDOW_WIDTH = 800;
@@ -80,6 +80,7 @@ struct PlayerSlot {
     std::unique_ptr<Snake> snake;
     std::string clientId;
     bool active;
+    bool paused;  // Whether this player is paused
     Uint32 lastMpSent;  // Track last multiplayer send time for throttling
 };
 
@@ -91,7 +92,7 @@ private:
     
 public:
     Food();
-    void spawn(const std::vector<Position>& occupiedPositions);
+    void spawn(const std::unordered_map<int, bool>& occupiedPositions);
     void setPosition(const Position& newPos) { pos = newPos; }
     Position getPosition() const { return pos; }
     SDL_Color getColor() const { return color; }

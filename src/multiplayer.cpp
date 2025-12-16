@@ -1,4 +1,6 @@
 #include "multiplayer.h"
+#include <iostream>
+
 
 
 void on_multiplayer_event( const char *event, int64_t messageId, const char *clientId, json_t *data, void *user_data)
@@ -12,11 +14,11 @@ void on_multiplayer_event( const char *event, int64_t messageId, const char *cli
             
             // If we're the host, send current game state to new player
             if (ctx->isHost && ctx->food) {
-                json_t *gameState = json_object();
-                json_object_set_new(gameState, "type", json_string("state_sync"));
-                json_object_set_new(gameState, "foodX", json_integer(ctx->food->getPosition().x));
-                json_object_set_new(gameState, "foodY", json_integer(ctx->food->getPosition().y));
-                json_object_set_new(gameState, "matchStartTime", json_integer(ctx->matchStartTime));
+                json_t *gameUpdate = json_object();
+                json_object_set_new(gameUpdate, "type", json_string("state_sync"));
+                json_object_set_new(gameUpdate, "foodX", json_integer(ctx->food->getPosition().x));
+                json_object_set_new(gameUpdate, "foodY", json_integer(ctx->food->getPosition().y));
+                json_object_set_new(gameUpdate, "matchStartTime", json_integer(ctx->matchStartTime));
                 
                 // Add existing players info
                 json_t *playersArray = json_array();
@@ -25,10 +27,10 @@ void on_multiplayer_event( const char *event, int64_t messageId, const char *cli
                         json_array_append_new(playersArray, json_string(ctx->players[i].clientId.c_str()));
                     }
                 }
-                json_object_set_new(gameState, "players", playersArray);
+                json_object_set_new(gameUpdate, "players", playersArray);
                 
-                mp_api_game(ctx->api, gameState);
-                json_decref(gameState);
+                mp_api_game(ctx->api, gameUpdate);
+                json_decref(gameUpdate);
             }
         }
 	} else if (strcmp(event, "leaved") == 0) {
@@ -56,6 +58,53 @@ void on_multiplayer_event( const char *event, int64_t messageId, const char *cli
                 
                 if (json_is_integer(matchTime)) {
                     ctx->matchStartTime = json_integer_value(matchTime);
+                }
+                
+                // Receive global pause command from any player
+                json_t *pausedVal = json_object_get(data, "globalPaused");
+                json_t *pausedBy = json_object_get(data, "pausedBy");
+                if (json_is_boolean(pausedVal) && json_is_string(pausedBy)) {
+                    bool isPaused = json_boolean_value(pausedVal);
+                    std::string pauserClientId = json_string_value(pausedBy);
+                    
+                    // Sync pause timing from pauser
+                    json_t *totalPausedVal = json_object_get(data, "totalPausedTime");
+                    json_t *pauseStartVal = json_object_get(data, "pauseStartTime");
+                    if (json_is_integer(totalPausedVal)) {
+                        ctx->totalPausedTime = json_integer_value(totalPausedVal);
+                    }
+                    if (json_is_integer(pauseStartVal)) {
+                        ctx->pauseStartTime = json_integer_value(pauseStartVal);
+                    }
+                    
+                    // Apply pause state to all players
+                    for (int i = 0; i < 4; i++) {
+                        if (ctx->players[i].active) {
+                            ctx->players[i].paused = isPaused;
+                        }
+                    }
+                    
+                    // Update game state (use enum value 6 for PAUSED, 16 for PLAYING)
+                    if (ctx->gameStatePtr) {
+                        int* statePtr = static_cast<int*>(ctx->gameStatePtr);
+                        
+                        if (isPaused) {
+                            *statePtr = 6;  // GameState::PAUSED
+                        } else {
+                            // Only change to PLAYING if we're currently PAUSED
+                            if (*statePtr == 6) {
+                                *statePtr = 16;  // GameState::PLAYING
+                            }
+                        }
+                    }
+                    
+                    // Update who paused
+                    ctx->pausedByClientId = isPaused ? pauserClientId : "";
+                    
+                    // Find player name for message
+                    int pauserIdx = find_player_by_client_id(*ctx, pauserClientId);
+                    std::string playerName = pauserIdx >= 0 ? "Player " + std::to_string(pauserIdx + 1) : "Someone";
+                    std::cout << (isPaused ? (playerName + " paused the game") : (playerName + " resumed the game")) << std::endl;
                 }
                 
                 // Add existing players from host
@@ -107,6 +156,18 @@ void send_game_state(GameContext& ctx, const Snake& snake)
     json_object_set_new(gameData, "score", json_integer(snake.getScore()));
     json_object_set_new(gameData, "alive", json_boolean(snake.isAlive()));
     
+    // Send paused status
+    int playerIdx = -1;
+    for (int i = 0; i < 4; i++) {
+        if (ctx.players[i].active && ctx.players[i].snake.get() == &snake) {
+            playerIdx = i;
+            break;
+        }
+    }
+    if (playerIdx >= 0) {
+        json_object_set_new(gameData, "paused", json_boolean(ctx.players[playerIdx].paused));
+    }
+    
     // Send full body for better sync
     json_t *bodyArray = json_array();
     for (const auto& segment : snake.getBody()) {
@@ -144,6 +205,21 @@ void sendPlayerUpdate(GameContext& ctx, int playerIndex)
     // Send the update
     send_game_state(ctx, *ctx.players[playerIndex].snake);
     ctx.players[playerIndex].lastMpSent = currentTime;
+}
+
+void sendGlobalPauseState(GameContext& ctx, bool paused, const std::string& pauserClientId)
+{
+    if (!ctx.api || ctx.sessionId.empty())
+        return;
+    
+    json_t *pauseUpdate = json_object();
+    json_object_set_new(pauseUpdate, "type", json_string("state_sync"));
+    json_object_set_new(pauseUpdate, "globalPaused", json_boolean(paused));
+    json_object_set_new(pauseUpdate, "pausedBy", json_string(pauserClientId.c_str()));
+    json_object_set_new(pauseUpdate, "totalPausedTime", json_integer(ctx.totalPausedTime));
+    json_object_set_new(pauseUpdate, "pauseStartTime", json_integer(ctx.pauseStartTime));
+    mp_api_game(ctx.api, pauseUpdate);
+    json_decref(pauseUpdate);
 }
 
 int multiplayer_host(GameContext& ctx)
@@ -354,6 +430,13 @@ void update_remote_player(GameContext& ctx, const std::string& clientId, json_t*
     if (json_is_boolean(alive_val))
     {
         ctx.players[idx].snake->setAlive(json_boolean_value(alive_val));
+    }
+    
+    // Receive paused status
+    json_t *paused_val = json_object_get(data, "paused");
+    if (json_is_boolean(paused_val))
+    {
+        ctx.players[idx].paused = json_boolean_value(paused_val);
     }
 }
 

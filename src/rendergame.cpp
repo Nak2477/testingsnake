@@ -1,7 +1,8 @@
 #include "rendergame.h"
+#include "multiplayer.h"
 #include <algorithm>
 
-GameRenderer::GameRenderer(SDL_Renderer* r, MenuRenderer* u) 
+GameRender::GameRender(SDL_Renderer* r, MenuRender* u) 
     : renderer(r),
             ui(u),
     gridTexture(nullptr) 
@@ -9,14 +10,14 @@ GameRenderer::GameRenderer(SDL_Renderer* r, MenuRenderer* u)
     createGridTexture();
     }
 
-GameRenderer::~GameRenderer()
+GameRender::~GameRender()
 {
     if (gridTexture) {
         SDL_DestroyTexture(gridTexture);
     }
 }
 
-void GameRenderer::createGridTexture()
+void GameRender::createGridTexture()
 {
     // Create texture with window dimensions
     gridTexture = SDL_CreateTexture(renderer, 
@@ -25,7 +26,7 @@ void GameRenderer::createGridTexture()
                                     WINDOW_WIDTH, WINDOW_HEIGHT);
     if (!gridTexture) return;
     
-    // Render grid lines to texture once
+    // gameState grid lines to texture once
     SDL_SetRenderTarget(renderer, gridTexture);
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);  // Transparent background
     SDL_RenderClear(renderer);
@@ -41,7 +42,13 @@ void GameRenderer::createGridTexture()
     SDL_SetRenderTarget(renderer, nullptr);  // Reset to screen
 }
 
-void GameRenderer::renderGrid()
+void GameRender::clearScreen()
+{
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+    SDL_RenderClear(renderer);
+}
+
+void GameRender::renderGrid()
 {
     // Just copy the pre-rendered texture (1 blit instead of 70 draw calls!)
     if (gridTexture)
@@ -50,7 +57,7 @@ void GameRenderer::renderGrid()
     }
 }
 
-void GameRenderer::renderPlayers(const std::array<PlayerSlot, 4>& players)
+void GameRender::renderPlayers(const std::array<PlayerSlot, 4>& players)
 {
     for (int p = 0; p < 4; p++)
     {
@@ -81,7 +88,7 @@ void GameRenderer::renderPlayers(const std::array<PlayerSlot, 4>& players)
     }
 }
 
-void GameRenderer::renderFood(const Food& food)
+void GameRender::renderFood(const Food& food)
 {
     SDL_Color foodColor = food.getColor();
     Position foodPos = food.getPosition();
@@ -95,7 +102,7 @@ void GameRenderer::renderFood(const Food& food)
     SDL_RenderFillRect(renderer, &rect);
 }
 
-void GameRenderer::renderHUD(int score, int remainingSeconds, const std::string& sessionId)
+void GameRender::renderHUD(int score, int remainingSeconds, const std::string& sessionId)
 {
     char text[64];
     // Score
@@ -115,32 +122,45 @@ void GameRenderer::renderHUD(int score, int remainingSeconds, const std::string&
     }
 }
 
-void GameRenderer::renderMatchEnd(int winnerIndex, const std::array<PlayerSlot, 4>& players)
+void GameRender::renderGame(const GameContext& ctx, bool matchEnded, Uint32 matchStartTime)
 {
-    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 200);
-    SDL_Rect overlay = {0, 0, WINDOW_WIDTH, WINDOW_HEIGHT};
-    SDL_RenderFillRect(renderer, &overlay);
+    // Clear screen
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+    SDL_RenderClear(renderer);
     
-    char text[128];
-
-    if (winnerIndex >= 0 && players[winnerIndex].snake)
-    {
-        snprintf(text, sizeof(text), "MATCH ENDED - Player %d WINS!", winnerIndex + 1);
-        ui->renderText(text, WINDOW_WIDTH/2 - 150, WINDOW_HEIGHT/2 - 60, {0, 255, 0, 255});
-        
-        snprintf(text, sizeof(text), "Length: %zu  Score: %d", 
-                players[winnerIndex].snake->getBody().size(),
-                players[winnerIndex].snake->getScore());
-        ui->renderText(text, WINDOW_WIDTH/2 - 100, WINDOW_HEIGHT/2 - 20, {255, 255, 255, 255});
-    } else {
-        snprintf(text, sizeof(text), "MATCH ENDED - NO WINNER");
-        ui->renderText(text, WINDOW_WIDTH/2 - 120, WINDOW_HEIGHT/2 - 30, {255, 0, 0, 255});
+    // gameState game elements
+    renderGrid();
+    renderPlayers(ctx.players);
+    renderFood(*ctx.food);
+    
+    // Calculate score and remaining time for HUD
+    int myScore = 0;
+    if (ctx.myPlayerIndex >= 0 && ctx.players[ctx.myPlayerIndex].snake) {
+        myScore = ctx.players[ctx.myPlayerIndex].snake->getScore();
     }
     
-    ui->renderText("Press R to start new match", WINDOW_WIDTH/2 - 120, WINDOW_HEIGHT/2 + 30, {200, 200, 200, 255});
+    Uint32 currentTime = SDL_GetTicks();
+    int remainingSeconds = 0;
+    if (!matchEnded)
+    {
+        // Use synced match start time from context
+        Uint32 matchStart = ctx.matchStartTime > 0 ? ctx.matchStartTime : matchStartTime;
+        
+        // Calculate elapsed time, subtracting paused time
+        Uint32 currentPausedTime = ctx.totalPausedTime;
+        if (ctx.pauseStartTime > 0) {
+            // Add current pause duration to total
+            currentPausedTime += (currentTime - ctx.pauseStartTime);
+        }
+        
+        Uint32 elapsedSeconds = (currentTime - matchStart - currentPausedTime) / 1000;
+        remainingSeconds = MATCH_DURATION_SECONDS - elapsedSeconds;
+    }
+    
+    renderHUD(myScore, remainingSeconds, ctx.sessionId);
 }
 
-void GameRenderer::renderPauseMenu()
+void GameRender::present()
 {
-    ui->renderPauseMenu();
+    SDL_RenderPresent(renderer);
 }

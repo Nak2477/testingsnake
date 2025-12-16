@@ -1,11 +1,68 @@
 #include "rendermenu.h"
 #include <sstream>
 #include <iomanip>
+#include <iostream>
 
-MenuRenderer::MenuRenderer(SDL_Renderer* r, TTF_Font* f, TTF_Font* tf)
-    : renderer(r), font(f), titleFont(tf) {}
+bool MenuRender::sdlInitialized = false;
 
-MenuRenderer::~MenuRenderer()
+MenuRender::MenuRender()
+    : window(nullptr), renderer(nullptr), font(nullptr), titleFont(nullptr)
+{
+    if (sdlInitialized) {
+        throw std::runtime_error("SDL already initialized - cannot create multiple MenuRender instances");
+    }
+    
+    if (SDL_Init(SDL_INIT_VIDEO) < 0) {
+        std::cerr << "SDL init failed: " << SDL_GetError() << std::endl;
+        throw std::runtime_error("SDL initialization failed");
+    }
+
+    if (TTF_Init() == -1) {
+        std::cerr << "SDL_ttf init failed: " << TTF_GetError() << std::endl;
+        SDL_Quit();
+        throw std::runtime_error("SDL_ttf initialization failed");
+    }
+    
+    sdlInitialized = true;
+    
+    window = SDL_CreateWindow(
+        "Hardcore Snake",
+        SDL_WINDOWPOS_CENTERED,
+        SDL_WINDOWPOS_CENTERED,
+        WINDOW_WIDTH,
+        WINDOW_HEIGHT,
+        SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE
+    );
+
+    if (!window) {
+        std::cerr << "Window creation failed: " << SDL_GetError() << std::endl;
+        TTF_Quit();
+        SDL_Quit();
+        throw std::runtime_error("Window creation failed");
+    }
+
+    renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
+    if (!renderer) {
+        std::cerr << "Renderer creation failed: " << SDL_GetError() << std::endl;
+        SDL_DestroyWindow(window);
+        TTF_Quit();
+        SDL_Quit();
+        throw std::runtime_error("Renderer creation failed");
+    }
+    
+    SDL_RenderSetLogicalSize(renderer, WINDOW_WIDTH, WINDOW_HEIGHT);
+
+    font = TTF_OpenFont("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 24);
+    titleFont = TTF_OpenFont("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 36);
+    
+    if (!font) {
+        std::cerr << "Font load failed: " << TTF_GetError() << std::endl;
+        font = nullptr;
+    }
+    if (!titleFont) titleFont = font;
+}
+
+MenuRender::~MenuRender()
 {
     // Clean up all cached textures
     for (auto& pair : textureCache) {
@@ -14,9 +71,19 @@ MenuRenderer::~MenuRenderer()
         }
     }
     textureCache.clear();
+    
+    // Cleanup SDL resources
+    if (font) TTF_CloseFont(font);
+    if (titleFont && titleFont != font) TTF_CloseFont(titleFont);
+    if (renderer) SDL_DestroyRenderer(renderer);
+    if (window) SDL_DestroyWindow(window);
+    TTF_Quit();
+    SDL_Quit();
+    
+    sdlInitialized = false;
 }
 
-SDL_Texture* MenuRenderer::createTextTexture(const char* text, SDL_Color color, TTF_Font* textFont)
+SDL_Texture* MenuRender::createTextTexture(const char* text, SDL_Color color, TTF_Font* textFont)
 {
     if (!textFont) textFont = font;
     if (!textFont) return nullptr;
@@ -30,7 +97,7 @@ SDL_Texture* MenuRenderer::createTextTexture(const char* text, SDL_Color color, 
     return texture;
 }
 
-SDL_Texture* MenuRenderer::getCachedTexture(const char* text, SDL_Color color, TTF_Font* textFont)
+SDL_Texture* MenuRender::getCachedTexture(const char* text, SDL_Color color, TTF_Font* textFont)
 {
     // Create unique key: text + color + font
     std::stringstream ss;
@@ -52,7 +119,7 @@ SDL_Texture* MenuRenderer::getCachedTexture(const char* text, SDL_Color color, T
     return texture;
 }
 
-void MenuRenderer::renderText(const char* text, int x, int y, SDL_Color color, TTF_Font* textFont)
+void MenuRender::renderText(const char* text, int x, int y, SDL_Color color, TTF_Font* textFont)
 {
     if (!textFont) textFont = font;
     if (!textFont) return;
@@ -73,7 +140,7 @@ void MenuRenderer::renderText(const char* text, int x, int y, SDL_Color color, T
     SDL_FreeSurface(surface);
 }
 
-void MenuRenderer::renderCachedText(const char* text, int x, int y, SDL_Color color, TTF_Font* textFont)
+void MenuRender::renderCachedText(const char* text, int x, int y, SDL_Color color, TTF_Font* textFont)
 {
     if (!textFont) textFont = font;
     if (!textFont) return;
@@ -87,14 +154,14 @@ void MenuRenderer::renderCachedText(const char* text, int x, int y, SDL_Color co
     SDL_RenderCopy(renderer, texture, nullptr, &destRect);
 }
 
-void MenuRenderer::renderMenu(int menuSelection)
+void MenuRender::renderMenu(int menuSelection)
 {
     // Draw title
     SDL_Rect titleRect = {WINDOW_WIDTH / 2 - 150, 100, 300, 60};
     //SDL_SetRenderDrawColor(renderer, 0, 255, 0, 255);
     SDL_RenderFillRect(renderer, &titleRect);
 
-    renderCachedText("HARDCORE SNAKE", WINDOW_WIDTH / 2 - 240, 100, {0, 255, 0, 255}, titleFont);
+    renderCachedText("HARDCORE SNAKE", WINDOW_WIDTH / 2 - 180, 100, {0, 255, 0, 255}, titleFont);
     // Menu options
     const char* options[] = {"Single Player", "Multiplayer", "Quit"};
     int startY = 250;
@@ -111,10 +178,58 @@ void MenuRenderer::renderMenu(int menuSelection)
         // Draw text (cached)
         renderCachedText(options[i], WINDOW_WIDTH / 2 - 80, startY + i * spacing + 12, textColor);
     }
-        renderCachedText("Use Arrow Keys/WASD  -  Enter to Select", WINDOW_WIDTH / 2 - 180, WINDOW_HEIGHT - 60, {150, 150, 150, 255});
+        renderCachedText("Use Arrow Keys/WASD  -  Enter to Select", WINDOW_WIDTH / 2 - 240, WINDOW_HEIGHT - 60, {150, 150, 150, 255});
 }
 
-void MenuRenderer::renderPauseMenu()
+void MenuRender::renderLobby(const std::array<PlayerSlot, 4>& players, bool isHost)
+{
+    // Draw title
+    renderCachedText("WAITING FOR PLAYERS", WINDOW_WIDTH / 2 - 200, 80, {0, 255, 0, 255}, titleFont);
+    
+    // Draw player list
+    int startY = 180;
+    int spacing = 60;
+    
+    for (int i = 0; i < 4; i++) {
+        char text[64];
+        if (players[i].active && players[i].snake) {
+            snprintf(text, sizeof(text), "Player %d: Ready", i + 1);
+            renderCachedText(text, WINDOW_WIDTH / 2 - 100, startY + i * spacing, {0, 255, 0, 255});
+        } else {
+            snprintf(text, sizeof(text), "Player %d: Waiting...", i + 1);
+            renderCachedText(text, WINDOW_WIDTH / 2 - 100, startY + i * spacing, {150, 150, 150, 255});
+        }
+    }
+    
+    // Instructions
+    if (isHost) {
+        renderCachedText("Press SPACE to start match", WINDOW_WIDTH / 2 - 150, WINDOW_HEIGHT - 80, {255, 255, 0, 255});
+    } else {
+        renderCachedText("Waiting for host to start...", WINDOW_WIDTH / 2 - 150, WINDOW_HEIGHT - 80, {255, 255, 0, 255});
+    }
+}
+
+void MenuRender::renderCountdown(int seconds)
+{
+    // Semi-transparent overlay
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 180);
+    SDL_Rect overlay = {0, 0, WINDOW_WIDTH, WINDOW_HEIGHT};
+    SDL_RenderFillRect(renderer, &overlay);
+    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
+    
+    // Draw countdown number
+    char text[16];
+    if (seconds > 0) {
+        snprintf(text, sizeof(text), "%d", seconds);
+    } else {
+        snprintf(text, sizeof(text), "GO!");
+    }
+    
+    renderText(text, WINDOW_WIDTH / 2 - 40, WINDOW_HEIGHT / 2 - 60, {0, 255, 0, 255}, titleFont);
+}
+
+void MenuRender::renderPauseMenu()
 {
     // Semi-transparent overlay
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
@@ -123,9 +238,9 @@ void MenuRenderer::renderPauseMenu()
     SDL_RenderFillRect(renderer, &overlay);
     
     // Pause box
-    SDL_Rect pauseBox = {WINDOW_WIDTH / 2 - 150, WINDOW_HEIGHT / 2 - 100, 300, 200};
-    SDL_SetRenderDrawColor(renderer, 40, 40, 40, 255);
-    SDL_RenderFillRect(renderer, &pauseBox);
+    //SDL_Rect pauseBox = {WINDOW_WIDTH / 2 - 150, WINDOW_HEIGHT / 2 - 100, 300, 200};
+    //SDL_SetRenderDrawColor(renderer, 40, 40, 40, 255);
+    //SDL_RenderFillRect(renderer, &pauseBox);
     //
     //SDL_SetRenderDrawColor(renderer, 0, 255, 0, 255);
     //SDL_RenderDrawRect(renderer, &pauseBox);
@@ -136,66 +251,46 @@ void MenuRenderer::renderPauseMenu()
     SDL_RenderFillRect(renderer, &titleRect);
     
     // Options
-    SDL_Rect resumeRect = {WINDOW_WIDTH / 2 - 100, WINDOW_HEIGHT / 2, 200, 35};
     SDL_SetRenderDrawColor(renderer, 60, 60, 60, 255);
+
+    SDL_Rect resumeRect = {WINDOW_WIDTH / 2 - 100, WINDOW_HEIGHT / 2, 200, 35};
     SDL_RenderFillRect(renderer, &resumeRect);
+
+    SDL_Rect restartRect = {WINDOW_WIDTH / 2 - 100, WINDOW_HEIGHT / 2 + 50, 200, 35};
+    SDL_RenderFillRect(renderer, &restartRect);
     
-    SDL_Rect menuRect = {WINDOW_WIDTH / 2 - 100, WINDOW_HEIGHT / 2 + 50, 200, 35};
+    SDL_Rect menuRect = {WINDOW_WIDTH / 2 - 100, WINDOW_HEIGHT / 2 + 100, 200, 35};
     SDL_RenderFillRect(renderer, &menuRect);
     
     SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
 
-    renderCachedText("PAUSED", WINDOW_WIDTH / 2 - 105, WINDOW_HEIGHT / 2 - 100, {0, 255, 0, 255}, titleFont);
-    renderCachedText("ESC/P - Resume", WINDOW_WIDTH / 2 - 95, WINDOW_HEIGHT / 2, {255, 255, 255, 255});
-    renderCachedText("M - Main Menu", WINDOW_WIDTH / 2 - 95, WINDOW_HEIGHT / 2 + 55, {255, 255, 255, 255});
+    renderCachedText("PAUSED", WINDOW_WIDTH / 2 - 80, WINDOW_HEIGHT / 2 - 100, {0, 255, 0, 255}, titleFont);
+    
+    renderCachedText("Resume", WINDOW_WIDTH / 2 - 50, WINDOW_HEIGHT / 2, {255, 215, 0, 255});
+    renderCachedText("Restart", WINDOW_WIDTH / 2 - 45, WINDOW_HEIGHT / 2 + 50, {255, 215, 0, 255});
+
+    renderCachedText("Menu", WINDOW_WIDTH / 2 - 35, WINDOW_HEIGHT / 2 + 100, {255, 215, 0, 255});
 }
 
-void MenuRenderer::renderGameOver(const std::vector<std::unique_ptr<Snake>>& snakes)
+void MenuRender::renderMatchEnd(int winnerIndex, const std::array<PlayerSlot, 4>& players)
 {
-    // Semi-transparent overlay
-    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
-    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 180);
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 200);
     SDL_Rect overlay = {0, 0, WINDOW_WIDTH, WINDOW_HEIGHT};
     SDL_RenderFillRect(renderer, &overlay);
     
-    // Game over box
-    SDL_Rect gameOverBox = {WINDOW_WIDTH / 2 - 180, WINDOW_HEIGHT / 2 - 120, 360, 240};
-    //SDL_SetRenderDrawColor(renderer, 40, 40, 40, 255);
-    SDL_RenderFillRect(renderer, &gameOverBox);
-    SDL_RenderDrawRect(renderer, &gameOverBox);
-    
-    // Title
-    SDL_Rect titleRect = {WINDOW_WIDTH / 2 - 100, WINDOW_HEIGHT / 2 - 90, 200, 50};
-    //SDL_SetRenderDrawColor(renderer, 200, 0, 0, 255);
-    SDL_RenderFillRect(renderer, &titleRect);
-    
-    //SDL_SetRenderDrawColor(renderer, 255, 0, 0, 255); // behind GAME OVER
-    renderCachedText("GAME OVER", WINDOW_WIDTH / 2 -160, WINDOW_HEIGHT / 2 -100, {255, 0, 0, 255}, titleFont);
+    char text[128];
 
-
-    // Score display areas
-    int yOffset = WINDOW_HEIGHT / 2 - 20;
-    for (size_t i = 0; i < snakes.size(); i++) {
-        char scoreText[50];
-        SDL_Rect scoreRect = {WINDOW_WIDTH / 2 - 150, yOffset + (int)i * 40, 300, 30};
-        //SDL_SetRenderDrawColor(renderer, 60, 60, 60, 255);
-        SDL_RenderFillRect(renderer, &scoreRect);
-
-        // Use dynamic renderText for scores (changes every game)
-        snprintf(scoreText, sizeof(scoreText), "Player %d: %d", (int)i + 1, snakes[i]->getScore());
-        renderText(scoreText, WINDOW_WIDTH / 2 - 80, WINDOW_HEIGHT / 2 - 40 + i * 40, {255, 255, 255, 255});
+    if (winnerIndex >= 0 && winnerIndex < 4 && players.at(winnerIndex).snake)
+    {
+        snprintf(text, sizeof(text), "MATCH ENDED - Player %d WINS!", winnerIndex + 1);
+        renderText(text, WINDOW_WIDTH/2 - 150, WINDOW_HEIGHT/2 - 60, {0, 255, 0, 255});
+        
+        snprintf(text, sizeof(text), "SCORE - %d", players.at(winnerIndex).snake->getScore());
+        
+        renderText(text, WINDOW_WIDTH/2 - 100, WINDOW_HEIGHT/2 - 20, {255, 255, 255, 255});
+    } else {
+        renderCachedText("MATCH ENDED - NO WINNER", WINDOW_WIDTH/2 - 120, WINDOW_HEIGHT/2 - 30, {255, 0, 0, 255});
     }
-
-    // Options
-    SDL_Rect restartRect = {WINDOW_WIDTH / 2 - 120, WINDOW_HEIGHT / 2 + 60, 240, 35};
-    SDL_SetRenderDrawColor(renderer, 0, 150, 0, 255);
-    SDL_RenderFillRect(renderer, &restartRect);
     
-    SDL_Rect menuRect = {WINDOW_WIDTH / 2 - 120, WINDOW_HEIGHT / 2 + 105, 240, 35};
-    SDL_SetRenderDrawColor(renderer, 60, 60, 60, 255);
-    SDL_RenderFillRect(renderer, &menuRect);
-    SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_NONE);
-
-    renderCachedText("Enter - Play Again", WINDOW_WIDTH / 2 - 100, WINDOW_HEIGHT / 2 + 60, {200, 200, 200, 255});
-    renderCachedText("M - Main Menu", WINDOW_WIDTH / 2 - 100, WINDOW_HEIGHT / 2 + 105, {200, 200, 200, 255});
+    renderCachedText("Press R to start new match", WINDOW_WIDTH/2 - 120, WINDOW_HEIGHT/2 + 30, {200, 200, 200, 255});
 }

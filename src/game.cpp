@@ -3,37 +3,36 @@
 #include <ctime>
 
 Game::Game() 
-    : window(nullptr), renderer(nullptr), font(nullptr), titleFont(nullptr),
-      ui(nullptr), gameRenderer(nullptr),
-      quit(false), paused(false), gameOver(false), matchEnded(false),
-      winnerIndex(-1), lastUpdate(0), matchStartTime(0), updateInterval(INITIAL_SPEED)
+    : ui(nullptr), gameRenderer(nullptr),
+      state(GameState::MENU), quit(false),
+      updateInterval(INITIAL_SPEED), menuSelection(0)
 {
-    // Note: srand() is called in main(), not here
-    
+    // Initialize game context
     ctx.myPlayerIndex = -1;
     ctx.api = nullptr;
     ctx.food = &food;
     ctx.isHost = false;
     ctx.matchStartTime = 0;
+    ctx.winnerIndex = -1;
+    ctx.totalPausedTime = 0;
+    ctx.pauseStartTime = 0;
+    ctx.gameStatePtr = &state;
     
-    if (!initSDL()) {
-        throw std::runtime_error("Failed to initialize SDL");
-    }
+    // Initialize SDL and rendering (throws on failure)
+    ui = new MenuRender();
+    gameRenderer = new GameRender(ui->getRenderer(), ui);
     
-    initMultiplayer();
+
     initPlayers();
     
+    // Reserve capacity for collision detection map
+    occupiedPositions.reserve(400);  // 4 players * ~100 segments max
+    
     // Spawn initial food
-    std::vector<Position> occupiedPositions;
     food.spawn(occupiedPositions);
     
-    // Create renderers
-    ui = new MenuRenderer(renderer, font, titleFont);
-    gameRenderer = new GameRenderer(renderer, ui);
-    
     // Initialize timing
-    lastUpdate = SDL_GetTicks();
-    matchStartTime = SDL_GetTicks();
+    lastUpdate = matchStartTime = SDL_GetTicks();
 }
 
 Game::~Game()
@@ -41,17 +40,9 @@ Game::~Game()
     // Cleanup multiplayer
     if (ctx.api) mp_api_destroy(ctx.api);
     
-    // Cleanup renderers
-    delete gameRenderer;
+    // Cleanup renderers (MenuRender destructor handles SDL cleanup)
     delete ui;
-    
-    // Cleanup SDL
-    if (font) TTF_CloseFont(font);
-    if (titleFont && titleFont != font) TTF_CloseFont(titleFont);
-    if (renderer) SDL_DestroyRenderer(renderer);
-    if (window) SDL_DestroyWindow(window);
-    TTF_Quit();
-    SDL_Quit();
+    delete gameRenderer;
     
     // Print final score
     if (ctx.myPlayerIndex >= 0 && ctx.players[ctx.myPlayerIndex].snake) {
@@ -65,76 +56,8 @@ void Game::run()
         handleInput();
         update();
         render();
-        //SDL_Delay(16);
+        //SDL_Delay(16);  // ~60 FPS
     }
-}
-
-bool Game::initSDL()
-{
-    if (SDL_Init(SDL_INIT_VIDEO) < 0) {
-        std::cerr << "SDL init failed: " << SDL_GetError() << std::endl;
-        return false;
-    }
-
-    if (TTF_Init() == -1) {
-        std::cerr << "SDL_ttf init failed: " << TTF_GetError() << std::endl;
-        SDL_Quit();
-        return false;
-    }
-    
-    window = SDL_CreateWindow(
-        "Hardcore Snake",
-        SDL_WINDOWPOS_CENTERED,
-        SDL_WINDOWPOS_CENTERED,
-        WINDOW_WIDTH,
-        WINDOW_HEIGHT,
-        SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE
-    );
-
-    if (!window) {
-        std::cerr << "Window creation failed: " << SDL_GetError() << std::endl;
-        TTF_Quit();
-        SDL_Quit();
-        return false;
-    }
-
-    renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
-    if (!renderer) {
-        std::cerr << "Renderer creation failed: " << SDL_GetError() << std::endl;
-        SDL_DestroyWindow(window);
-        TTF_Quit();
-        SDL_Quit();
-        return false;
-    }
-    
-    SDL_RenderSetLogicalSize(renderer, WINDOW_WIDTH, WINDOW_HEIGHT);
-
-    font = TTF_OpenFont("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 24);
-    titleFont = TTF_OpenFont("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 36);
-    
-    if (!font) {
-        std::cerr << "Font load failed: " << TTF_GetError() << std::endl;
-        font = nullptr;
-    }
-    if (!titleFont) titleFont = font;
-    
-    return true;
-}
-
-void Game::initMultiplayer()
-{
-    std::cout << "\n=== Hardcore Snake ===" << std::endl;
-    ctx.api = mp_api_create("kontoret.onvo.se", 9001);
-    if (!ctx.api) {
-        std::cerr << "Failed to create multiplayer API" << std::endl;
-        return;
-    }
-    
-    std::cout << "Testing connection with list..." << std::endl;
-    multiplayer_list(ctx);
-    
-    std::cout << "Setting up event listener..." << std::endl;
-    mp_api_listen(ctx.api, on_multiplayer_event, &ctx);
 }
 
 void Game::initPlayers()
@@ -144,80 +67,45 @@ void Game::initPlayers()
         ctx.players[i].active = false;
         ctx.players[i].clientId = "";
         ctx.players[i].snake = nullptr;
+        ctx.players[i].paused = false;
     }
 }
 
 void Game::handleInput()
 {
     SDL_Event e;
-
     while (SDL_PollEvent(&e) != 0)
     {
         if (e.type == SDL_QUIT)
         {
             quit = true;
+            continue;
         }
-        else if (e.type == SDL_KEYDOWN)
+        
+        if (e.type == SDL_KEYDOWN)
         {
-            // Cache snake pointer to avoid repeated lookups
-            Snake* mySnake = (ctx.myPlayerIndex >= 0 && ctx.players[ctx.myPlayerIndex].snake) 
-                              ? ctx.players[ctx.myPlayerIndex].snake.get() 
-                              : nullptr;
-            bool canMove = !paused && !gameOver && mySnake;
-            
-            switch (e.key.keysym.sym) {
-                case SDLK_UP:
-                    if (canMove) mySnake->setDirection(Direction::UP);
+            // Dispatch to state-specific handlers
+            switch (state)
+            {
+                case GameState::MENU:
+                    handleMenuInput(e.key.keysym.sym);
                     break;
-                case SDLK_DOWN:
-                    if (canMove) mySnake->setDirection(Direction::DOWN);
+                case GameState::MULTIPLAYER:
+                    handleMultiplayerInput(e.key.keysym.sym);
                     break;
-                case SDLK_LEFT:
-                    if (canMove) mySnake->setDirection(Direction::LEFT);
+                case GameState::LOBBY:
+                    handleLobbyInput(e.key.keysym.sym);
                     break;
-                case SDLK_RIGHT:
-                    if (canMove) mySnake->setDirection(Direction::RIGHT);
+                case GameState::PLAYING:
+                    handlePlayingInput(e.key.keysym.sym);
                     break;
-                case SDLK_r:
-                    resetMatch();
+                case GameState::PAUSED:
+                    handlePausedInput(e.key.keysym.sym);
                     break;
-                case SDLK_p:
-                    paused = !paused;
+                case GameState::MATCH_END:
+                    handleMatchEndInput(e.key.keysym.sym);
                     break;
-                case SDLK_n:
-                    // Start singleplayer mode
-                    if (ctx.sessionId.empty() && !ctx.players[0].active) 
-                    {
-                        Position startPos = {GRID_WIDTH / 2, GRID_HEIGHT / 2};
-                        ctx.players[0].snake = std::make_unique<Snake>(SDL_Color{0, 255, 0, 255}, startPos);
-                        ctx.players[0].active = true;
-                        ctx.players[0].clientId = "local_player";
-                        ctx.myPlayerIndex = 0;
-                        std::cout << "Started singleplayer mode - Press N to start" << std::endl;
-                    }
-                    break;
-                case SDLK_h:
-                    if (ctx.api && ctx.sessionId.empty()) multiplayer_host(ctx);
-                    break;
-                case SDLK_l:
-                    if (ctx.api && ctx.sessionId.empty()) multiplayer_list(ctx);
-                    break;
-                case SDLK_1:
-                case SDLK_2:
-                case SDLK_3:
-                case SDLK_4:
-                    if (ctx.api && ctx.sessionId.empty() && !ctx.availableSessions.empty())
-                    {
-                        int idx = e.key.keysym.sym - SDLK_1;
-                        if (idx < (int)ctx.availableSessions.size())
-                        {
-                            std::cout << "Joining session: " << ctx.availableSessions[idx] << std::endl;
-                            multiplayer_join(ctx, ctx.availableSessions[idx].c_str());
-                        }
-                    }
-                    break;
-                case SDLK_ESCAPE:
-                    quit = true;
+                default:
                     break;
             }
         }
@@ -226,69 +114,324 @@ void Game::handleInput()
 
 void Game::update()
 {
+    // Only update game logic when playing or paused
+    if (state != GameState::PLAYING && state != GameState::PAUSED)
+        return;
+    
     Uint32 currentTime = SDL_GetTicks();
     
-    checkMatchTimer(currentTime);
+    // Only check timer when actively playing (not paused)
+    if (state == GameState::PLAYING) {
+        checkMatchTimer(currentTime);
+    }
     
-    if (!paused && !matchEnded && currentTime - lastUpdate >= (Uint32)updateInterval)
+    // Update players when playing, or send keepalive updates when paused
+    if (currentTime - lastUpdate >= (Uint32)updateInterval)
     {
         lastUpdate = currentTime;
-        updatePlayers();
+        
+        if (state == GameState::PLAYING) {
+            // Normal game update - move snakes, check collisions
+            updatePlayers();
+        } else if (state == GameState::PAUSED) {
+            // Paused - just send position update to keep session alive
+            if (ctx.myPlayerIndex >= 0 && 
+                ctx.players[ctx.myPlayerIndex].active && 
+                ctx.players[ctx.myPlayerIndex].snake) {
+                sendPlayerUpdate(ctx, ctx.myPlayerIndex);
+            }
+        }
     }
 }
 
 void Game::render()
 {
-    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
-    SDL_RenderClear(renderer);
+    switch (state)
+    {
+        case GameState::MENU:
+            gameRenderer->clearScreen();
+            ui->renderMenu(menuSelection);
+            break;
+            
+        case GameState::SINGLEPLAYER:
+        case GameState::MULTIPLAYER:
+            // Transition states - render menu
+            gameRenderer->clearScreen();
+            ui->renderMenu(menuSelection);
+            break;
+            
+        case GameState::LOBBY:
+            gameRenderer->clearScreen();
+            ui->renderLobby(ctx.players, ctx.isHost);
+            break;
+            
+        case GameState::COUNTDOWN:
+            gameRenderer->renderGame(ctx, false, matchStartTime);
+            // ui->renderCountdown(countdownSeconds); // TODO: Need to track countdown timer
+            break;
+            
+        case GameState::PLAYING:
+            gameRenderer->renderGame(ctx, false, matchStartTime);
+            break;
+            
+        case GameState::PAUSED:
+            gameRenderer->renderGame(ctx, false, matchStartTime);
+            ui->renderPauseMenu();
+            break;
+            
+        case GameState::MATCH_END:
+            gameRenderer->renderGame(ctx, true, matchStartTime);
+            ui->renderMatchEnd(ctx.winnerIndex, ctx.players);
+            break;
+    }
 
-    gameRenderer->renderGrid();
-    gameRenderer->renderPlayers(ctx.players);
-    gameRenderer->renderFood(food);
-    
-    // Calculate score and remaining time for HUD
-    int myScore = 0;
-    if (ctx.myPlayerIndex >= 0 && ctx.players[ctx.myPlayerIndex].snake) {
-        myScore = ctx.players[ctx.myPlayerIndex].snake->getScore();
-    }
-    
-    Uint32 currentTime = SDL_GetTicks();
-    int remainingSeconds = 0;
-    if (!matchEnded)
-    {
-        // Use synced match start time from context
-        Uint32 matchStart = ctx.matchStartTime > 0 ? ctx.matchStartTime : matchStartTime;
-        Uint32 elapsedSeconds = (currentTime - matchStart) / 1000;
-        remainingSeconds = MATCH_DURATION_SECONDS - elapsedSeconds;
-    }
-    gameRenderer->renderHUD(myScore, remainingSeconds, ctx.sessionId);
-    
-    if (matchEnded)
-    {
-        gameRenderer->renderMatchEnd(winnerIndex, ctx.players);
-    }
-    
-    if (paused)
-    {
-        gameRenderer->renderPauseMenu();
-    }
+    gameRenderer->present();
+}
 
-    SDL_RenderPresent(renderer);
+void Game::handleMenuInput(SDL_Keycode key)
+{
+    // Clean up multiplayer when in menu
+    if (ctx.api) {
+        mp_api_destroy(ctx.api);
+        ctx.api = nullptr;
+        ctx.sessionId.clear();
+        ctx.myPlayerIndex = -1;
+        for (int i = 0; i < 4; i++) {
+            ctx.players[i].active = false;
+            ctx.players[i].snake = nullptr;
+        }
+    }
+    
+    switch (key)
+    {
+        case SDLK_UP:
+        case SDLK_w:
+            menuSelection = (menuSelection - 1 + 3) % 3;
+            break;
+        case SDLK_DOWN:
+        case SDLK_s:
+            menuSelection = (menuSelection + 1) % 3;
+            break;
+        case SDLK_RETURN:
+        case SDLK_SPACE:
+
+            if (menuSelection == 0)
+            {  // Single Player
+                Position startPos = {GRID_WIDTH / 2, GRID_HEIGHT / 2};
+                ctx.players[0].snake = std::make_unique<Snake>(SDL_Color{0, 255, 0, 255}, startPos);
+                ctx.players[0].active = true;
+                ctx.players[0].clientId = "local_player";
+                ctx.myPlayerIndex = 0;
+                ctx.isHost = true;
+                state = GameState::PLAYING;
+                std::cout << "Started singleplayer mode" << std::endl;
+            }
+            else if (menuSelection == 1)
+            {  // Multiplayer
+                ctx.api = mp_api_create("kontoret.onvo.se", 9001);
+                if (ctx.api)
+                {
+                    mp_api_listen(ctx.api, on_multiplayer_event, &ctx);
+
+                    state = GameState::MULTIPLAYER;
+                    std::cout << "Multiplayer - Press H to host or L to list sessions" << std::endl;
+                    return;
+                }
+                    std::cerr << "Failed to create multiplayer API" << std::endl;
+                
+            }
+            else if (menuSelection == 2)
+            {  // Quit
+                quit = true;
+            }
+            break;
+        case SDLK_ESCAPE:
+            quit = true;
+            break;
+    }
+}
+
+void Game::handleMultiplayerInput(SDL_Keycode key)
+{
+    switch (key)
+    {
+        case SDLK_h:
+            if (ctx.api && ctx.sessionId.empty()) {
+                multiplayer_host(ctx);
+                state = GameState::LOBBY;
+            }
+            break;
+        case SDLK_l:
+            if (ctx.api && ctx.sessionId.empty()) {
+                multiplayer_list(ctx);
+            }
+            break;
+        case SDLK_1:
+        case SDLK_2:
+        case SDLK_3:
+        case SDLK_4:
+            if (ctx.api && ctx.sessionId.empty() && !ctx.availableSessions.empty())
+            {
+                int idx = key - SDLK_1;
+                if (idx < (int)ctx.availableSessions.size())
+                {
+                    std::cout << "Joining session: " << ctx.availableSessions[idx] << std::endl;
+                    multiplayer_join(ctx, ctx.availableSessions[idx].c_str());
+                    state = GameState::LOBBY;
+                }
+            }
+            break;
+        case SDLK_ESCAPE:
+            state = GameState::MENU;
+            break;
+    }
+}
+
+void Game::handleLobbyInput(SDL_Keycode key)
+{
+    switch (key)
+    {
+        case SDLK_SPACE:
+            if (ctx.isHost) {
+                state = GameState::PLAYING;
+                matchStartTime = SDL_GetTicks();
+                ctx.matchStartTime = matchStartTime;
+            }
+            break;
+        case SDLK_ESCAPE:
+            state = GameState::MENU;
+            break;
+    }
+}
+
+void Game::handlePlayingInput(SDL_Keycode key)
+{
+    Snake* mySnake = (ctx.myPlayerIndex >= 0 && ctx.players[ctx.myPlayerIndex].snake) 
+                      ? ctx.players[ctx.myPlayerIndex].snake.get() 
+                      : nullptr;
+    
+    if (!mySnake)
+        return;
+    
+    switch (key)
+    {
+        case SDLK_UP:
+        case SDLK_w:
+            mySnake->setDirection(Direction::UP);
+            break;
+        case SDLK_DOWN:
+        case SDLK_s:
+            mySnake->setDirection(Direction::DOWN);
+            break;
+        case SDLK_LEFT:
+        case SDLK_a:
+            mySnake->setDirection(Direction::LEFT);
+            break;
+        case SDLK_RIGHT:
+        case SDLK_d:
+            mySnake->setDirection(Direction::RIGHT);
+            break;
+        case SDLK_p:
+        case SDLK_ESCAPE:
+            // Pause the game - transition to PAUSED state
+            state = GameState::PAUSED;
+            if (ctx.myPlayerIndex >= 0) {
+                ctx.players[ctx.myPlayerIndex].paused = true;
+            }
+            // Track pause start time
+            ctx.pauseStartTime = SDL_GetTicks();
+            // Broadcast pause
+            if (ctx.api) {
+                ctx.pausedByClientId = ctx.players[ctx.myPlayerIndex].clientId;
+                sendGlobalPauseState(ctx, true, ctx.pausedByClientId);
+            }
+            break;
+    }
+}
+
+void Game::handlePausedInput(SDL_Keycode key)
+{
+    // Helper to check unpause permission and get clientId
+    auto canUnpause = [this]() -> bool {
+        if (!ctx.api) return true;
+        if (ctx.myPlayerIndex < 0) return false;
+        std::string myClientId = ctx.players[ctx.myPlayerIndex].clientId;
+        return ctx.pausedByClientId.empty() || ctx.pausedByClientId == myClientId;
+    };
+    
+    // Helper to perform unpause
+    auto doUnpause = [this]() {
+        if (ctx.myPlayerIndex >= 0) {
+            ctx.players[ctx.myPlayerIndex].paused = false;
+        }
+        // Update pause timing
+        if (ctx.pauseStartTime > 0) {
+            ctx.totalPausedTime += (SDL_GetTicks() - ctx.pauseStartTime);
+            ctx.pauseStartTime = 0;
+        }
+        // Broadcast unpause
+        if (ctx.api && ctx.myPlayerIndex >= 0) {
+            ctx.pausedByClientId = "";
+            sendGlobalPauseState(ctx, false, ctx.players[ctx.myPlayerIndex].clientId);
+        }
+    };
+    
+    switch (key)
+    {
+        case SDLK_p:
+        case SDLK_SPACE:
+            if (!canUnpause()) {
+                std::cout << "Only the player who paused can unpause" << std::endl;
+                break;
+            }
+            state = GameState::PLAYING;
+            doUnpause();
+            break;
+        case SDLK_ESCAPE:
+            if (!canUnpause()) {
+                std::cout << "Only the player who paused can unpause" << std::endl;
+                break;
+            }
+            state = GameState::MENU;
+            doUnpause();
+            break;
+    }
+}
+
+void Game::handleMatchEndInput(SDL_Keycode key)
+{
+    switch (key)
+    {
+        case SDLK_r:
+            resetMatch();
+            break;
+        case SDLK_ESCAPE:
+            state = GameState::MENU;
+            break;
+    }
 }
 
 void Game::checkMatchTimer(Uint32 currentTime)
 {
-    if (matchEnded) return;
+    if (state == GameState::MATCH_END) return;
     
     // Use synced match start time from context
     Uint32 matchStart = ctx.matchStartTime > 0 ? ctx.matchStartTime : matchStartTime;
-    Uint32 elapsedSeconds = (currentTime - matchStart) / 1000;
+    
+    // Calculate elapsed time, subtracting paused time
+    Uint32 currentPausedTime = ctx.totalPausedTime;
+    if (state == GameState::PAUSED && ctx.pauseStartTime > 0) {
+        // Add current pause duration to total
+        currentPausedTime += (currentTime - ctx.pauseStartTime);
+    }
+    
+    Uint32 elapsedSeconds = (currentTime - matchStart - currentPausedTime) / 1000;
     if (elapsedSeconds >= MATCH_DURATION_SECONDS) {
-        matchEnded = true;
+        state = GameState::MATCH_END;
         
         // Find winner - longest snake
         int maxLength = 0;
-        winnerIndex = -1;
+        ctx.winnerIndex = -1;
         std::vector<int> tiedPlayers;
         
         for (int i = 0; i < 4; i++)
@@ -300,7 +443,7 @@ void Game::checkMatchTimer(Uint32 currentTime)
             
             if (length > maxLength) {
                 maxLength = length;
-                winnerIndex = i;
+                ctx.winnerIndex = i;
                 tiedPlayers.clear();
                 tiedPlayers.push_back(i);
             } else if (length == maxLength && maxLength > 0)
@@ -313,23 +456,23 @@ void Game::checkMatchTimer(Uint32 currentTime)
         if (tiedPlayers.size() > 1)
         {
             int maxScore = -1;
-            winnerIndex = -1;
+            ctx.winnerIndex = -1;
             for (int idx : tiedPlayers)
             {
                 if (ctx.players[idx].snake->getScore() > maxScore)
                 {
                     maxScore = ctx.players[idx].snake->getScore();
-                    winnerIndex = idx;
+                    ctx.winnerIndex = idx;
                 }
             }
         }
         
         std::cout << "Match ended! ";
-        if (winnerIndex >= 0)
+        if (ctx.winnerIndex >= 0)
         {
-            std::cout << "Winner: Player " << (winnerIndex + 1) 
-                     << " (Length: " << ctx.players[winnerIndex].snake->getBody().size()
-                     << ", Score: " << ctx.players[winnerIndex].snake->getScore() << ")" << std::endl;
+            std::cout << "Winner: Player " << (ctx.winnerIndex + 1) 
+                     << " (Length: " << ctx.players[ctx.winnerIndex].snake->getBody().size()
+                     << ", Score: " << ctx.players[ctx.winnerIndex].snake->getScore() << ")" << std::endl;
         } else {
             std::cout << "No winner (no active players)" << std::endl;
         }
@@ -338,37 +481,47 @@ void Game::checkMatchTimer(Uint32 currentTime)
 
 void Game::updatePlayers()
 {
+    // STEP 1: Build collision map from ALL snakes (local + remote)
+    occupiedPositions.clear();
+    for (int k = 0; k < 4; k++)
+    {
+        if (ctx.players[k].active && ctx.players[k].snake)
+        {
+            for (const auto& segment : ctx.players[k].snake->getBody()) {
+                int key = segment.y * GRID_WIDTH + segment.x;
+                occupiedPositions[key] = true;
+            }
+        }
+    }
+    
+    // STEP 2: Check food collision for ALL players
     for (int i = 0; i < 4; i++)
     {
         if (!ctx.players[i].active || !ctx.players[i].snake)
             continue;
-
         if (!ctx.players[i].snake->isAlive())
             continue;
         
-        // Check food collision for all players locally
-        if (ctx.players[i].snake->isAlive() && ctx.players[i].snake->getHead() == food.getPosition())
+        if (ctx.players[i].snake->getHead() == food.getPosition())
         {
             ctx.players[i].snake->grow();
             
-            // Send multiplayer update if it's our player
-            if (i == ctx.myPlayerIndex) {
-                sendPlayerUpdate(ctx, i);
-            }
-            
             // Only host spawns new food and broadcasts it
             if (ctx.isHost) {
+                // Rebuild map with new grown snake
                 occupiedPositions.clear();
                 for (int k = 0; k < 4; k++)
                 {
                     if (ctx.players[k].active && ctx.players[k].snake)
                     {
                         for (const auto& segment : ctx.players[k].snake->getBody()) {
-                            occupiedPositions.push_back(segment);
+                            int key = segment.y * GRID_WIDTH + segment.x;
+                            occupiedPositions[key] = true;
                         }
                     }
                 }
-                food.spawn(occupiedPositions);
+                
+                food.spawn(occupiedPositions);  // O(1) lookup in spawn!
                 
                 // Broadcast new food position
                 json_t *foodUpdate = json_object();
@@ -379,43 +532,44 @@ void Game::updatePlayers()
                 mp_api_game(ctx.api, foodUpdate);
                 json_decref(foodUpdate);
             }
-            
-            if (updateInterval > MIN_UPDATE_INTERVAL) updateInterval -= SPEED_INCREASE;
         }
+    }
+    
+    // STEP 3: Update local player only
+    if (ctx.myPlayerIndex >= 0 && 
+        ctx.players[ctx.myPlayerIndex].active && 
+        ctx.players[ctx.myPlayerIndex].snake)
+    {
+        int i = ctx.myPlayerIndex;
         
-        // Only update local player locally - remote players are updated via network
-        if (i != ctx.myPlayerIndex)
-            continue;
-            
-        ctx.players[i].snake->update();
+        // Remove my head from collision map temporarily (don't collide with own head position)
+        Position oldHead = ctx.players[i].snake->getHead();
+        int oldHeadKey = oldHead.y * GRID_WIDTH + oldHead.x;
+        occupiedPositions.erase(oldHeadKey);
+        
+        ctx.players[i].snake->update();  // Move snake
+        Position newHead = ctx.players[i].snake->getHead();
+        int newHeadKey = newHead.y * GRID_WIDTH + newHead.x;
         
         // Send multiplayer update for local player (throttled)
         sendPlayerUpdate(ctx, i);
         
-        // Check boundary and self collision
-        if (ctx.players[i].snake->checkBoundaryCollision() || 
-            ctx.players[i].snake->checkSelfCollision()) {
-            respawnPlayer(i);
-            std::cout << "Player " << (i+1) << " died and respawned!" << std::endl;
-            continue;
+        // Check ALL collisions with O(1) map lookup!
+        bool collision = false;
+        
+        // Boundary collision
+        if (newHead.x < 0 || newHead.x >= GRID_WIDTH || 
+            newHead.y < 0 || newHead.y >= GRID_HEIGHT) {
+            collision = true;
+        }
+        // Collision with any snake (including self-collision)
+        else if (occupiedPositions.count(newHeadKey) > 0) {
+            collision = true;
         }
         
-        // Check collision with other snakes
-        for (int j = 0; j < 4; j++)
-        {
-            if (i == j)
-                continue;
-            if (!ctx.players[j].active || !ctx.players[j].snake)
-                continue;
-            if (!ctx.players[j].snake->isAlive())
-                continue;
-            
-            if (ctx.players[j].snake->checkCollision(ctx.players[i].snake->getHead()))
-            {
-                respawnPlayer(i);
-                std::cout << "Player " << (i+1) << " hit player " << (j+1) << " and respawned!" << std::endl;
-                break;
-            }
+        if (collision) {
+            respawnPlayer(i);
+            std::cout << "Player " << (i+1) << " died and respawned!" << std::endl;
         }
     }
 }
@@ -443,13 +597,14 @@ void Game::resetMatch()
             ctx.players[i].snake->reset(spawnPos);
         }
     }
-    gameOver = false;
-    matchEnded = false;
-    winnerIndex = -1;
+    state = GameState::PLAYING;
+    ctx.winnerIndex = -1;
     matchStartTime = SDL_GetTicks();
+    ctx.matchStartTime = matchStartTime;
+    ctx.totalPausedTime = 0;
+    ctx.pauseStartTime = 0;
     occupiedPositions.clear();
     food.spawn(occupiedPositions);
     updateInterval = INITIAL_SPEED;
-    paused = false;
     std::cout << "Game reset!" << std::endl;
 }
