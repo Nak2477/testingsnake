@@ -136,12 +136,57 @@ struct MatchState {
     bool isPaused() const { return !pausedByClientId.empty(); }
 };
 
-// Player management
-struct PlayerManager {
-    std::array<PlayerSlot, 4> players;
-    int myPlayerIndex;
+// Player management with proper encapsulation
+class PlayerManager {
+private:
+    std::array<PlayerSlot, 4> slots;
+    int myIndex;
     
-    PlayerManager() : myPlayerIndex(-1) {}
+public:
+    PlayerManager() : myIndex(-1) {}
+    
+    // Array-style access
+    PlayerSlot& operator[](int i) { return slots[i]; }
+    const PlayerSlot& operator[](int i) const { return slots[i]; }
+    
+    // Direct access to underlying array (for render functions that need it)
+    std::array<PlayerSlot, 4>& getSlots() { return slots; }
+    const std::array<PlayerSlot, 4>& getSlots() const { return slots; }
+    
+    // Convenience accessors for "my player"
+    PlayerSlot& me() { return slots[myIndex]; }
+    const PlayerSlot& me() const { return slots[myIndex]; }
+    int myPlayerIndex() const { return myIndex; }
+    void setMyPlayerIndex(int i) { myIndex = i; }
+    bool hasMe() const { return myIndex >= 0; }
+    
+    // Validation
+    bool isValid(int i) const { 
+        return i >= 0 && i < 4 && slots[i].active && slots[i].snake; 
+    }
+    
+    // Search operations
+    int findByClientId(const std::string& id) const {
+        for (int i = 0; i < 4; i++) {
+            if (slots[i].active && slots[i].clientId == id) return i;
+        }
+        return -1;
+    }
+    
+    // Iteration support (allows range-based for loops)
+    auto begin() { return slots.begin(); }
+    auto end() { return slots.end(); }
+    auto begin() const { return slots.begin(); }
+    auto end() const { return slots.end(); }
+    
+    // Utility
+    int activeCount() const {
+        int count = 0;
+        for (const auto& slot : slots) {
+            if (slot.active) count++;
+        }
+        return count;
+    }
 };
 
 // Main game context - composition of focused components

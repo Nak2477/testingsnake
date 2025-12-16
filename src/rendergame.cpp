@@ -130,13 +130,13 @@ void GameRender::renderGame(const GameContext& ctx, bool matchEnded)
     
     // gameState game elements
     renderGrid();
-    renderPlayers(ctx.players.players);
+    renderPlayers(ctx.players.getSlots());
     renderFood(*ctx.food);
     
     // Calculate score and remaining time for HUD
     int myScore = 0;
-    if (ctx.players.myPlayerIndex >= 0 && ctx.players.players[ctx.players.myPlayerIndex].snake) {
-        myScore = ctx.players.players[ctx.players.myPlayerIndex].snake->getScore();
+    if (ctx.players.hasMe() && ctx.players.me().snake) {
+        myScore = ctx.players.me().snake->getScore();
     }
     
     int remainingSeconds = 0;

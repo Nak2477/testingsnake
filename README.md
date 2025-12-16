@@ -1,3 +1,16 @@
+# Install dependencies (Ubuntu/Debian)
+sudo apt-get install cmake libsdl2-dev libsdl2-ttf-dev uuid-dev libcurl4-openssl-dev
+
+# Build
+mkdir -p build && cd build
+cmake ..
+make
+
+# Run
+./HardcoreSnake
+
+
+
 Priority 1 (Polish):
 
 Add error messages to session browser UI

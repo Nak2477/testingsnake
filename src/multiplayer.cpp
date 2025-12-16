@@ -113,7 +113,7 @@ bool NetworkManager::hostSession() {
     
     // Add myself as a player
     add_player(*ctx, clientId);
-    ctx->players.myPlayerIndex = find_player_by_client_id(*ctx, clientId);
+    ctx->players.setMyPlayerIndex(find_player_by_client_id(*ctx, clientId));
     
     // Initialize match start time as host
     ctx->match.matchStartTime = SDL_GetTicks();
@@ -197,7 +197,7 @@ bool NetworkManager::joinSession(const std::string& sessionId) {
     std::cout << "Joined session: " << joinedSession << " (clientId: " << joinedClientId << ")" << std::endl;
     
     // Will be assigned player index when host sends state_sync
-    ctx->players.myPlayerIndex = -1;
+    ctx->players.setMyPlayerIndex(-1);
     
     // Cleanup
     free(joinedSession);
@@ -373,19 +373,19 @@ static void handlePlayerJoined(GameContext& ctx, const std::string& clientId)
     if (isMe) {
         // I'm joining - add myself immediately
         add_player(ctx, clientId);
-        ctx.players.myPlayerIndex = find_player_by_client_id(ctx, clientId);
-        std::cout << "I joined as player " << (ctx.players.myPlayerIndex + 1) << std::endl;
+        ctx.players.setMyPlayerIndex(find_player_by_client_id(ctx, clientId));
+        std::cout << "I joined as player " << (ctx.players.myPlayerIndex() + 1) << std::endl;
         
         // If I'm the first player and not explicitly host, I'm likely the host
         // (Server makes first joiner the host)
-        if (ctx.players.myPlayerIndex == 0 && !ctx.network.isHost) {
+        if (ctx.players.myPlayerIndex() == 0 && !ctx.network.isHost) {
             ctx.network.hostClientId = clientId;
             std::cout << "Detected as session host (first player)" << std::endl;
         }
     } else {
         // Someone else joined - add them
         // If this is the first player joining and we don't know the host yet, they're likely the host
-        if (ctx.network.hostClientId.empty() && ctx.players.players[0].active == false) {
+        if (ctx.network.hostClientId.empty() && ctx.players[0].active == false) {
             ctx.network.hostClientId = clientId;
             std::cout << "Detected host: " << clientId << std::endl;
         }
@@ -404,8 +404,8 @@ static void handlePlayerJoined(GameContext& ctx, const std::string& clientId)
         // Add existing players info
         JsonPtr playersArray(json_array());
         for (int i = 0; i < 4; i++) {
-            if (ctx.players.players[i].active && !ctx.players.players[i].clientId.empty()) {
-                json_array_append_new(playersArray.get(), json_string(ctx.players.players[i].clientId.c_str()));
+            if (ctx.players[i].active && !ctx.players[i].clientId.empty()) {
+                json_array_append_new(playersArray.get(), json_string(ctx.players[i].clientId.c_str()));
             }
         }
         json_object_set_new(gameUpdate.get(), "players", playersArray.release());
@@ -478,8 +478,8 @@ static void handleStateSync(GameContext& ctx, json_t* data)
         
         // Apply pause state to all players
         for (int i = 0; i < 4; i++) {
-            if (ctx.players.players[i].active) {
-                ctx.players.players[i].paused = isPaused;
+            if (ctx.players[i].active) {
+                ctx.players[i].paused = isPaused;
             }
         }
         
@@ -515,9 +515,9 @@ static void handleStateSync(GameContext& ctx, json_t* data)
                     add_player(ctx, pId);
                     std::cout << "Added player from state_sync: " << pId << std::endl;
                     // If this is me, set my index
-                    if (pId == ctx.network.myClientId && ctx.players.myPlayerIndex < 0) {
-                        ctx.players.myPlayerIndex = find_player_by_client_id(ctx, pId);
-                        std::cout << "I am player " << (ctx.players.myPlayerIndex + 1) << std::endl;
+                    if (pId == ctx.network.myClientId && ctx.players.myPlayerIndex() < 0) {
+                        ctx.players.setMyPlayerIndex(find_player_by_client_id(ctx, pId));
+                        std::cout << "I am player " << (ctx.players.myPlayerIndex() + 1) << std::endl;
                     }
                 }
             }
@@ -561,13 +561,13 @@ static void send_game_state(GameContext& ctx, const Snake& snake)
     // Send paused status
     int playerIdx = -1;
     for (int i = 0; i < 4; i++) {
-        if (ctx.players.players[i].active && ctx.players.players[i].snake.get() == &snake) {
+        if (ctx.players[i].active && ctx.players[i].snake.get() == &snake) {
             playerIdx = i;
             break;
         }
     }
     if (playerIdx >= 0) {
-        json_object_set_new(gameData.get(), "paused", json_boolean(ctx.players.players[playerIdx].paused));
+        json_object_set_new(gameData.get(), "paused", json_boolean(ctx.players[playerIdx].paused));
     }
     
     // Send full body for better sync
@@ -591,14 +591,14 @@ static void sendPlayerUpdate(GameContext& ctx, int playerIndex)
     // Validate player index and state
     if (playerIndex < 0 || playerIndex >= 4)
         return;
-    if (!ctx.players.players[playerIndex].active || !ctx.players.players[playerIndex].snake)
+    if (!ctx.players[playerIndex].active || !ctx.players[playerIndex].snake)
         return;
     if (ctx.network.sessionId.empty() || !ctx.network.api)
         return;
     
     // Send the update (no throttle - game tick rate naturally limits frequency)
-    send_game_state(ctx, *ctx.players.players[playerIndex].snake);
-    ctx.players.players[playerIndex].lastMpSent = SDL_GetTicks();
+    send_game_state(ctx, *ctx.players[playerIndex].snake);
+    ctx.players[playerIndex].lastMpSent = SDL_GetTicks();
 }
 
 void NetworkManager::sendGameMessage(json_t* message)
@@ -632,11 +632,11 @@ static void add_player(GameContext& ctx, const std::string& clientId)
 {
     // Find first available slot
     for (int i = 0; i < 4; i++) {
-        if (!ctx.players.players[i].active) {
-            ctx.players.players[i].snake = std::make_unique<Snake>(PLAYER_COLORS[i], PLAYER_SPAWN_POSITIONS[i]);
-            ctx.players.players[i].clientId = clientId;
-            ctx.players.players[i].active = true;
-            ctx.players.players[i].lastMpSent = 0;
+        if (!ctx.players[i].active) {
+            ctx.players[i].snake = std::make_unique<Snake>(PLAYER_COLORS[i], PLAYER_SPAWN_POSITIONS[i]);
+            ctx.players[i].clientId = clientId;
+            ctx.players[i].active = true;
+            ctx.players[i].lastMpSent = 0;
             
             std::cout << "Player " << (i+1) << " joined: " << clientId << std::endl;
             break;
@@ -648,7 +648,7 @@ static int find_player_by_client_id(const GameContext& ctx, const std::string& c
 {
     for (int i = 0; i < 4; i++)
     {
-        if (ctx.players.players[i].active && ctx.players.players[i].clientId == clientId)
+        if (ctx.players[i].active && ctx.players[i].clientId == clientId)
         {
             return i;
         }
@@ -660,7 +660,7 @@ static void update_remote_player(GameContext& ctx, const std::string& clientId, 
 {
     int idx = find_player_by_client_id(ctx, clientId);
     
-    if (idx < 0 || !ctx.players.players[idx].snake) {
+    if (idx < 0 || !ctx.players[idx].snake) {
         return;
     }
 
@@ -703,7 +703,7 @@ static void update_remote_player(GameContext& ctx, const std::string& clientId, 
         
         if (!newBody.empty())
         {
-            ctx.players.players[idx].snake->setBody(newBody);
+            ctx.players[idx].snake->setBody(newBody);
         }
     }
 
@@ -713,7 +713,7 @@ static void update_remote_player(GameContext& ctx, const std::string& clientId, 
         int score = json_integer_value(score_val);
         // Validate score is reasonable (0 to 10000)
         if (score >= 0 && score <= 10000) {
-            ctx.players.players[idx].snake->setScore(score);
+            ctx.players[idx].snake->setScore(score);
         } else {
             std::cerr << "WARNING: Invalid score from client " << clientId 
                       << " (" << score << ") - ignoring" << std::endl;
@@ -723,14 +723,14 @@ static void update_remote_player(GameContext& ctx, const std::string& clientId, 
     json_t *alive_val = json_object_get(data, "alive");
     if (json_is_boolean(alive_val))
     {
-        ctx.players.players[idx].snake->setAlive(json_boolean_value(alive_val));
+        ctx.players[idx].snake->setAlive(json_boolean_value(alive_val));
     }
     
     // Receive paused status
     json_t *paused_val = json_object_get(data, "paused");
     if (json_is_boolean(paused_val))
     {
-        ctx.players.players[idx].paused = json_boolean_value(paused_val);
+        ctx.players[idx].paused = json_boolean_value(paused_val);
     }
 }
 
@@ -738,11 +738,11 @@ static void remove_player(GameContext& ctx, const std::string& clientId)
 {
     for (int i = 0; i < 4; i++)
     {
-        if (ctx.players.players[i].active && ctx.players.players[i].clientId == clientId)
+        if (ctx.players[i].active && ctx.players[i].clientId == clientId)
         {
-            ctx.players.players[i].active = false;
-            ctx.players.players[i].snake = nullptr;
-            ctx.players.players[i].clientId = "";
+            ctx.players[i].active = false;
+            ctx.players[i].snake = nullptr;
+            ctx.players[i].clientId = "";
             std::cout << "Player " << (i+1) << " left" << std::endl;
             break;
         }
@@ -778,8 +778,8 @@ static void sendFullStateSync(GameContext& ctx)
     // Player list
     JsonPtr playersArray(json_array());
     for (int i = 0; i < 4; i++) {
-        if (ctx.players.players[i].active && !ctx.players.players[i].clientId.empty()) {
-            json_array_append_new(playersArray.get(), json_string(ctx.players.players[i].clientId.c_str()));
+        if (ctx.players[i].active && !ctx.players[i].clientId.empty()) {
+            json_array_append_new(playersArray.get(), json_string(ctx.players[i].clientId.c_str()));
         }
     }
     json_object_set_new(gameUpdate.get(), "players", playersArray.release());
