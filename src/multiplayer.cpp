@@ -2,6 +2,21 @@
 #include "game.h"
 #include <iostream>
 
+// Player spawn positions and colors (indexed by player slot 0-3)
+static const Position PLAYER_SPAWN_POSITIONS[4] = {
+    {GRID_WIDTH/4, GRID_HEIGHT/4},          // Player 1: Top-left
+    {3*GRID_WIDTH/4, GRID_HEIGHT/4},        // Player 2: Top-right
+    {GRID_WIDTH/4, 3*GRID_HEIGHT/4},        // Player 3: Bottom-left
+    {3*GRID_WIDTH/4, 3*GRID_HEIGHT/4}       // Player 4: Bottom-right
+};
+
+static const SDL_Color PLAYER_COLORS[4] = {
+    {0, 255, 0, 255},    // Green
+    {0, 0, 255, 255},    // Blue
+    {255, 255, 0, 255},  // Yellow
+    {255, 0, 255, 255}   // Magenta
+};
+
 
 
 void on_multiplayer_event( const char *event, int64_t messageId, const char *clientId, json_t *data, void *user_data)
@@ -49,11 +64,12 @@ void on_multiplayer_event( const char *event, int64_t messageId, const char *cli
         }
     } else if (strcmp(event, "game") == 0) {
         // Process updates from other clients
-        std::string myClientId = (ctx->myPlayerIndex >= 0) ? ctx->players[ctx->myPlayerIndex].clientId : "";
         if (clientId && data) {
-            // Check if this is a state sync from host
+            // Check message type
             json_t *type_val = json_object_get(data, "type");
-            if (json_is_string(type_val) && strcmp(json_string_value(type_val), "state_sync") == 0) {
+            const char* messageType = json_is_string(type_val) ? json_string_value(type_val) : "";
+            
+            if (strcmp(messageType, "state_sync") == 0) {
                 // Sync game state from host
                 json_t *foodX = json_object_get(data, "foodX");
                 json_t *foodY = json_object_get(data, "foodY");
@@ -70,6 +86,12 @@ void on_multiplayer_event( const char *event, int64_t messageId, const char *cli
                     ctx->matchStartTime = json_integer_value(matchTime);
                 }
                 
+                // Sync elapsed time if provided
+                json_t *elapsedVal = json_object_get(data, "elapsedMs");
+                if (json_is_integer(elapsedVal)) {
+                    ctx->syncedElapsedMs = json_integer_value(elapsedVal);
+                }
+                
                 // Receive game state change from host
                 json_t *gameStateVal = json_object_get(data, "gameState");
                 if (json_is_string(gameStateVal) && ctx->gameStatePtr) {
@@ -84,15 +106,6 @@ void on_multiplayer_event( const char *event, int64_t messageId, const char *cli
                     } else if (strcmp(stateStr, "MATCH_END") == 0) {
                         *statePtr = GameState::MATCH_END;
                         std::cout << "Match ended!" << std::endl;
-                    }
-                }
-                
-                // Receive authoritative time from host
-                json_t *timeSyncType = json_object_get(data, "type");
-                if (json_is_string(timeSyncType) && strcmp(json_string_value(timeSyncType), "time_sync") == 0) {
-                    json_t *elapsedVal = json_object_get(data, "elapsedMs");
-                    if (json_is_integer(elapsedVal)) {
-                        ctx->syncedElapsedMs = json_integer_value(elapsedVal);
                     }
                 }
                 
@@ -154,7 +167,7 @@ void on_multiplayer_event( const char *event, int64_t messageId, const char *cli
                                 add_player(*ctx, pId);
                                 std::cout << "Added player from state_sync: " << pId << std::endl;
                                 // If this is me, set my index
-                                if (ctx->myPlayerIndex < 0) {
+                                if (pId == ctx->myClientId && ctx->myPlayerIndex < 0) {
                                     ctx->myPlayerIndex = find_player_by_client_id(*ctx, pId);
                                     std::cout << "I am player " << (ctx->myPlayerIndex + 1) << std::endl;
                                 }
@@ -162,7 +175,13 @@ void on_multiplayer_event( const char *event, int64_t messageId, const char *cli
                         }
                     }
                 }
-            } else if (std::string(clientId) != myClientId) {
+            } else if (strcmp(messageType, "time_sync") == 0) {
+                // Receive authoritative time from host
+                json_t *elapsedVal = json_object_get(data, "elapsedMs");
+                if (json_is_integer(elapsedVal)) {
+                    ctx->syncedElapsedMs = json_integer_value(elapsedVal);
+                }
+            } else if (std::string(clientId) != ctx->myClientId) {
                 std::cout << "Updating remote player: " << clientId << std::endl;
                 update_remote_player(*ctx, clientId, data);
             }
@@ -279,6 +298,7 @@ int multiplayer_host(GameContext& ctx)
 
 	// Store session ID and client ID in context
 	ctx.sessionId = session;
+	ctx.myClientId = clientId;  // Store my client ID
 	ctx.isHost = true;  // Mark as host
 	printf("Du hostar session: %s (clientId: %s)\n", session, clientId);
 	
@@ -360,6 +380,7 @@ int multiplayer_join(GameContext& ctx, const char* sessionId)
 
 	if (rc == MP_API_OK) {
 		ctx.sessionId = joinedSession;
+		ctx.myClientId = joinedClientId;  // Store my client ID
 		ctx.isHost = false;  // Mark as non-host
 		printf("Ansluten till session: %s (clientId: %s)\n", joinedSession, joinedClientId);
 		
@@ -386,21 +407,7 @@ void add_player(GameContext& ctx, const std::string& clientId)
     // Find first available slot
     for (int i = 0; i < 4; i++) {
         if (!ctx.players[i].active) {
-            Position spawnPos[] = {
-                {GRID_WIDTH/4, GRID_HEIGHT/4},
-                {3*GRID_WIDTH/4, GRID_HEIGHT/4},
-                {GRID_WIDTH/4, 3*GRID_HEIGHT/4},
-                {3*GRID_WIDTH/4, 3*GRID_HEIGHT/4}
-            };
-            
-            SDL_Color colors[] = {
-                {0, 255, 0, 255},   // Green
-                {0, 0, 255, 255},   // Blue
-                {255, 255, 0, 255}, // Yellow
-                {255, 0, 255, 255}  // Magenta
-            };
-            
-            ctx.players[i].snake = std::make_unique<Snake>(colors[i], spawnPos[i]);
+            ctx.players[i].snake = std::make_unique<Snake>(PLAYER_COLORS[i], PLAYER_SPAWN_POSITIONS[i]);
             ctx.players[i].clientId = clientId;
             ctx.players[i].active = true;
             ctx.players[i].lastMpSent = 0;

@@ -15,6 +15,7 @@ extern "C" {
 struct GameContext {
     MultiplayerApi* api;
     std::string sessionId;
+    std::string myClientId;  // My client ID from API
     int myPlayerIndex;
     bool isHost;  // True if this client is hosting the session
     std::array<PlayerSlot, 4> players;

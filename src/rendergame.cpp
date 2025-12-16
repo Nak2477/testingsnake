@@ -122,7 +122,7 @@ void GameRender::renderHUD(int score, int remainingSeconds, const std::string& s
     }
 }
 
-void GameRender::renderGame(const GameContext& ctx, bool matchEnded, Uint32 matchStartTime)
+void GameRender::renderGame(const GameContext& ctx, bool matchEnded)
 {
     // Clear screen
     SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
@@ -139,21 +139,11 @@ void GameRender::renderGame(const GameContext& ctx, bool matchEnded, Uint32 matc
         myScore = ctx.players[ctx.myPlayerIndex].snake->getScore();
     }
     
-    Uint32 currentTime = SDL_GetTicks();
     int remainingSeconds = 0;
     if (!matchEnded)
     {
-        // Use synced match start time from context
-        Uint32 matchStart = ctx.matchStartTime > 0 ? ctx.matchStartTime : matchStartTime;
-        
-        // Calculate elapsed time, subtracting paused time
-        Uint32 currentPausedTime = ctx.totalPausedTime;
-        if (ctx.pauseStartTime > 0) {
-            // Add current pause duration to total
-            currentPausedTime += (currentTime - ctx.pauseStartTime);
-        }
-        
-        Uint32 elapsedSeconds = (currentTime - matchStart - currentPausedTime) / 1000;
+        // Use synced elapsed time from host (updated every second)
+        Uint32 elapsedSeconds = ctx.syncedElapsedMs / 1000;
         remainingSeconds = MATCH_DURATION_SECONDS - elapsedSeconds;
     }
     

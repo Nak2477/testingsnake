@@ -70,7 +70,6 @@ private:
     // Game loop state
     bool quit;
     Uint32 lastUpdate;
-    Uint32 matchStartTime;
     int updateInterval;
     int menuSelection;
     int pauseMenuSelection;

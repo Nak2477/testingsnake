@@ -39,7 +39,7 @@ Game::Game()
     food.spawn(occupiedPositions);
     
     // Initialize timing
-    lastUpdate = matchStartTime = SDL_GetTicks();
+    lastUpdate = SDL_GetTicks();
 }
 
 Game::~Game()
@@ -143,21 +143,21 @@ void Game::render()
             break;
             
         case GameState::COUNTDOWN:
-            gameRenderer->renderGame(ctx, false, matchStartTime);
+            gameRenderer->renderGame(ctx, false);
             // ui->renderCountdown(countdownSeconds); // TODO: Need to track countdown timer
             break;
             
         case GameState::PLAYING:
-            gameRenderer->renderGame(ctx, false, matchStartTime);
+            gameRenderer->renderGame(ctx, false);
             break;
             
         case GameState::PAUSED:
-            gameRenderer->renderGame(ctx, false, matchStartTime);
+            gameRenderer->renderGame(ctx, false);
             ui->renderPauseMenu(pauseMenuSelection);
             break;
             
         case GameState::MATCH_END:
-            gameRenderer->renderGame(ctx, true, matchStartTime);
+            gameRenderer->renderGame(ctx, true);
             ui->renderMatchEnd(ctx.winnerIndex, ctx.players);
             break;
     }
@@ -232,9 +232,11 @@ void Game::enterState(GameState newState)
                 // DON'T reset positions - they're already set when players joined
                 // Just initialize timing
                 if (ctx.isHost) {
-                    matchStartTime = SDL_GetTicks();
-                    ctx.matchStartTime = matchStartTime;
+                    // Host is authoritative for match timing
+                    ctx.matchStartTime = SDL_GetTicks();
                     ctx.syncedElapsedMs = 0;
+                    ctx.totalPausedTime = 0;
+                    ctx.pauseStartTime = 0;
                     
                     // Spawn food for multiplayer match
                     buildCollisionMap();
@@ -246,6 +248,8 @@ void Game::enterState(GameState newState)
                         json_object_set_new(startUpdate, "type", json_string("state_sync"));
                         json_object_set_new(startUpdate, "gameState", json_string("PLAYING"));
                         json_object_set_new(startUpdate, "matchStartTime", json_integer(ctx.matchStartTime));
+                        json_object_set_new(startUpdate, "elapsedMs", json_integer(0));
+                        json_object_set_new(startUpdate, "totalPausedTime", json_integer(0));
                         json_object_set_new(startUpdate, "foodX", json_integer(food.getPosition().x));
                         json_object_set_new(startUpdate, "foodY", json_integer(food.getPosition().y));
                         mp_api_game(ctx.api, startUpdate);
@@ -254,6 +258,8 @@ void Game::enterState(GameState newState)
                 } else {
                     // Client initializes to 0, will be synced by host
                     ctx.syncedElapsedMs = 0;
+                    ctx.totalPausedTime = 0;
+                    ctx.pauseStartTime = 0;
                 }
             }
             inputHandler = &Game::handlePlayingInput;
@@ -289,8 +295,7 @@ void Game::handleMenuInput(SDL_Keycode key)
                 ctx.players[0].clientId = "local_player";
                 ctx.myPlayerIndex = 0;
                 ctx.isHost = true;
-                matchStartTime = SDL_GetTicks();
-                ctx.matchStartTime = matchStartTime;
+                ctx.matchStartTime = SDL_GetTicks();
                 changeState(GameState::PLAYING);
                 std::cout << "Started singleplayer mode" << std::endl;
             }
@@ -455,74 +460,88 @@ void Game::checkMatchTimer(Uint32 currentTime)
 {
     if (state == GameState::MATCH_END) return;
     
-    // Use synced match start time from context
-    Uint32 matchStart = ctx.matchStartTime > 0 ? ctx.matchStartTime : matchStartTime;
-    
-    // Calculate elapsed time, subtracting paused time
-    Uint32 currentPausedTime = ctx.totalPausedTime;
-    if (state == GameState::PAUSED && ctx.pauseStartTime > 0) {
-        currentPausedTime += (currentTime - ctx.pauseStartTime);
-    }
-    
-    Uint32 elapsedSeconds = (currentTime - matchStart - currentPausedTime) / 1000;
-    
-    // Only host checks for match end and broadcasts it
-    if (elapsedSeconds >= MATCH_DURATION_SECONDS && ctx.isHost && ctx.api) {
-        // Broadcast match end to all clients
-        json_t *endUpdate = json_object();
-        json_object_set_new(endUpdate, "type", json_string("state_sync"));
-        json_object_set_new(endUpdate, "gameState", json_string("MATCH_END"));
-        mp_api_game(ctx.api, endUpdate);
-        json_decref(endUpdate);
-        
-        state = GameState::MATCH_END;
-        
-        // Find winner - longest snake
-        int maxLength = 0;
-        ctx.winnerIndex = -1;
-        std::vector<int> tiedPlayers;
-        
-        for (int i = 0; i < 4; i++)
-        {
-            if (!ctx.players[i].active || !ctx.players[i].snake)
-                continue;
-
-            int length = ctx.players[i].snake->getBody().size();
-            
-            if (length > maxLength) {
-                maxLength = length;
-                ctx.winnerIndex = i;
-                tiedPlayers.clear();
-                tiedPlayers.push_back(i);
-            } else if (length == maxLength && maxLength > 0)
-            {
-                tiedPlayers.push_back(i);
-            }
+    // Only host tracks and broadcasts match time
+    if (ctx.isHost) {
+        // Calculate elapsed time, subtracting paused time
+        Uint32 currentPausedTime = ctx.totalPausedTime;
+        if (state == GameState::PAUSED && ctx.pauseStartTime > 0) {
+            currentPausedTime += (currentTime - ctx.pauseStartTime);
         }
         
-        // Tie-breaker: score
-        if (tiedPlayers.size() > 1)
-        {
-            int maxScore = -1;
+        Uint32 elapsedMs = currentTime - ctx.matchStartTime - currentPausedTime;
+        ctx.syncedElapsedMs = elapsedMs;
+        Uint32 elapsedSeconds = elapsedMs / 1000;
+        
+        // Broadcast timer update every second
+        static Uint32 lastTimerBroadcast = 0;
+        if (ctx.api && (currentTime - lastTimerBroadcast >= 1000)) {
+            json_t *timerUpdate = json_object();
+            json_object_set_new(timerUpdate, "type", json_string("time_sync"));
+            json_object_set_new(timerUpdate, "elapsedMs", json_integer(elapsedMs));
+            json_object_set_new(timerUpdate, "totalPausedTime", json_integer(ctx.totalPausedTime));
+            mp_api_game(ctx.api, timerUpdate);
+            json_decref(timerUpdate);
+            lastTimerBroadcast = currentTime;
+        }
+        
+        // Check for match end
+        if (elapsedSeconds >= MATCH_DURATION_SECONDS && ctx.api) {
+            // Broadcast match end to all clients
+            json_t *endUpdate = json_object();
+            json_object_set_new(endUpdate, "type", json_string("state_sync"));
+            json_object_set_new(endUpdate, "gameState", json_string("MATCH_END"));
+            mp_api_game(ctx.api, endUpdate);
+            json_decref(endUpdate);
+            
+            state = GameState::MATCH_END;
+            
+            // Find winner - longest snake
+            int maxLength = 0;
             ctx.winnerIndex = -1;
-            for (int idx : tiedPlayers)
+            std::vector<int> tiedPlayers;
+            
+            for (int i = 0; i < 4; i++)
             {
-                if (ctx.players[idx].snake->getScore() > maxScore)
+                if (!ctx.players[i].active || !ctx.players[i].snake)
+                    continue;
+
+                int length = ctx.players[i].snake->getBody().size();
+                
+                if (length > maxLength) {
+                    maxLength = length;
+                    ctx.winnerIndex = i;
+                    tiedPlayers.clear();
+                    tiedPlayers.push_back(i);
+                } else if (length == maxLength && maxLength > 0)
                 {
-                    maxScore = ctx.players[idx].snake->getScore();
-                    ctx.winnerIndex = idx;
+                    tiedPlayers.push_back(i);
                 }
             }
-        }
-        
-        std::cout << "Match ended! ";
-        if (ctx.winnerIndex >= 0)
-        {
-            std::cout << "Winner: Player " << (ctx.winnerIndex + 1) 
-                     << " (Length: " << ctx.players[ctx.winnerIndex].snake->getBody().size()
-                     << ", Score: " << ctx.players[ctx.winnerIndex].snake->getScore() << ")" << std::endl;
-        } else {
-            std::cout << "No winner (no active players)" << std::endl;
+            
+            // Tie-breaker: score
+            if (tiedPlayers.size() > 1)
+            {
+                int maxScore = -1;
+                ctx.winnerIndex = -1;
+                for (int idx : tiedPlayers)
+                {
+                    if (ctx.players[idx].snake->getScore() > maxScore)
+                    {
+                        maxScore = ctx.players[idx].snake->getScore();
+                        ctx.winnerIndex = idx;
+                    }
+                }
+            }
+            
+            std::cout << "Match ended! ";
+            if (ctx.winnerIndex >= 0)
+            {
+                std::cout << "Winner: Player " << (ctx.winnerIndex + 1) 
+                         << " (Length: " << ctx.players[ctx.winnerIndex].snake->getBody().size()
+                         << ", Score: " << ctx.players[ctx.winnerIndex].snake->getScore() << ")" << std::endl;
+            } else {
+                std::cout << "No winner (no active players)" << std::endl;
+            }
         }
     }
 }
@@ -614,6 +633,9 @@ void Game::respawnPlayer(int playerIndex)
 
 void Game::resetMatch()
 {
+    // Reset all active players to their original spawn positions
+    // Spawn positions match the formula used in multiplayer:
+    // Player i: {GRID_WIDTH/4 + (i%2)*(GRID_WIDTH/2), GRID_HEIGHT/4 + (i/2)*(GRID_HEIGHT/2)}
     for (int i = 0; i < 4; i++)
     {
         if (ctx.players[i].active && ctx.players[i].snake) {
@@ -625,8 +647,7 @@ void Game::resetMatch()
     }
     state = GameState::PLAYING;
     ctx.winnerIndex = -1;
-    matchStartTime = SDL_GetTicks();
-    ctx.matchStartTime = matchStartTime;
+    ctx.matchStartTime = SDL_GetTicks();
     ctx.totalPausedTime = 0;
     ctx.pauseStartTime = 0;
     occupiedPositions.clear();
@@ -675,6 +696,5 @@ void Game::resetGameState()
     ctx.winnerIndex = -1;
     ctx.totalPausedTime = 0;
     ctx.pauseStartTime = 0;
-    matchStartTime = 0;
     ctx.matchStartTime = 0;
 }

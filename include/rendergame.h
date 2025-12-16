@@ -25,7 +25,7 @@ public:
     void clearScreen();
     
     // High-level rendering
-    void renderGame(const GameContext& ctx, bool matchEnded, Uint32 matchStartTime);
+    void renderGame(const GameContext& ctx, bool matchEnded);
     void present();
 
 private:
