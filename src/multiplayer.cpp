@@ -349,12 +349,14 @@ static void processNetworkMessages(GameContext& ctx)
 
 static void handlePlayerJoined(GameContext& ctx, const std::string& clientId)
 {
-    // Check if this is me joining for the first time
-    bool isMe = (ctx.players.myPlayerIndex < 0);
+    // Check if this is me joining
+    bool isMe = (clientId == ctx.network.myClientId);
     
     if (isMe) {
-        // I'm joining - DON'T add myself yet, wait for host's state_sync
-        std::cout << "I joined, waiting for slot assignment from host..." << std::endl;
+        // I'm joining - add myself immediately
+        add_player(ctx, clientId);
+        ctx.players.myPlayerIndex = find_player_by_client_id(ctx, clientId);
+        std::cout << "I joined as player " << (ctx.players.myPlayerIndex + 1) << std::endl;
     } else {
         // Someone else joined - add them
         add_player(ctx, clientId);
