@@ -10,15 +10,16 @@ void on_multiplayer_event( const char *event, int64_t messageId, const char *cli
 
     if (strcmp(event, "joined") == 0) {
         if (clientId) {
-            // Add the player who joined
-            add_player(*ctx, clientId);
+            // Check if this is me joining for the first time
+            bool isMe = (ctx->myPlayerIndex < 0);
             
-            // If this is me joining, remember my slot
-            if (ctx->myPlayerIndex < 0) {
-                ctx->myPlayerIndex = find_player_by_client_id(*ctx, clientId);
-                if (ctx->myPlayerIndex >= 0) {
-                    std::cout << "I am player " << (ctx->myPlayerIndex + 1) << std::endl;
-                }
+            if (isMe) {
+                // I'm joining - DON'T add myself yet, wait for host's state_sync
+                std::cout << "I joined, waiting for slot assignment from host..." << std::endl;
+            } else {
+                // Someone else joined - add them
+                add_player(*ctx, clientId);
+                std::cout << "Player joined: " << clientId << std::endl;
             }
             
             // If we're the host, send current game state to new player
@@ -142,14 +143,21 @@ void on_multiplayer_event( const char *event, int64_t messageId, const char *cli
                 // Add existing players from host
                 json_t *playersArray = json_object_get(data, "players");
                 if (json_is_array(playersArray)) {
+                    std::cout << "Client receiving player list from host..." << std::endl;
                     size_t index;
                     json_t *playerClientId;
                     json_array_foreach(playersArray, index, playerClientId) {
                         if (json_is_string(playerClientId)) {
                             std::string pId = json_string_value(playerClientId);
-                            std::string myClientId = (ctx->myPlayerIndex >= 0) ? ctx->players[ctx->myPlayerIndex].clientId : "";
-                            if (pId != myClientId && find_player_by_client_id(*ctx, pId) < 0) {
+                            // Only add if not already present (avoid duplicates)
+                            if (find_player_by_client_id(*ctx, pId) < 0) {
                                 add_player(*ctx, pId);
+                                std::cout << "Added player from state_sync: " << pId << std::endl;
+                                // If this is me, set my index
+                                if (ctx->myPlayerIndex < 0) {
+                                    ctx->myPlayerIndex = find_player_by_client_id(*ctx, pId);
+                                    std::cout << "I am player " << (ctx->myPlayerIndex + 1) << std::endl;
+                                }
                             }
                         }
                     }
