@@ -8,3 +8,7 @@ REFACTORING_PHASE1.md
 CODE_REVIEW.md
 COMPREHENSIVE_REVIEW.md
 FULL_PROJECT_REVIEW_2024.md
+tests/test_collision.cpp
+tests/test_food.cpp
+tests/test_network.cpp
+tests/test_snake.cpp

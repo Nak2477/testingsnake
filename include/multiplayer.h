@@ -261,13 +261,13 @@ public:
     explicit NetworkManager(GameContext* context) : ctx(context) {}
     ~NetworkManager();
     
-    bool initialize(const std::string& host, int port);
+    [[nodiscard]] bool initialize(const std::string& host, int port);
     void shutdown();
     bool isConnected() const;
     
-    bool hostSession();
-    bool listSessions();
-    bool joinSession(const std::string& sessionId);
+    [[nodiscard]] bool hostSession();
+    [[nodiscard]] bool listSessions();
+    [[nodiscard]] bool joinSession(const std::string& sessionId);
     
     void processMessages();
     

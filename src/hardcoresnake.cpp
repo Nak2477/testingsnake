@@ -1,5 +1,6 @@
 #include "hardcoresnake.h"
 #include "multiplayer.h"
+#include "logger.h"
 #include <cstring>
 
 // Direction utility functions
@@ -15,6 +16,7 @@ const char* directionToString(Direction dir) {
 }
 
 Direction stringToDirection(const char* str) {
+    if (str == nullptr) return Direction::NONE;  // Null check prevents crash
     if (strcmp(str, "UP") == 0)    return Direction::UP;
     if (strcmp(str, "DOWN") == 0)  return Direction::DOWN;
     if (strcmp(str, "LEFT") == 0)  return Direction::LEFT;
@@ -136,7 +138,7 @@ void Snake::reset(const Position& startPos)
     direction = Direction::NONE;
     nextDirection = Direction::NONE;
     alive = true;
-    score -= 10;
+    score -= 10;  // Death penalty: subtract 10 points
 }
 
 void Snake::setBody(const std::deque<Position>& newBody)
@@ -147,9 +149,11 @@ void Snake::setBody(const std::deque<Position>& newBody)
     }
 }
 
-Food::Food()
+Food::Food() : pos{0, 0}
 {
+    // Initialize to a valid position
 }
+
 
 void Food::spawn(const std::unordered_map<int, bool>& occupiedPositions)
 {
@@ -169,8 +173,8 @@ void Food::spawn(const std::unordered_map<int, bool>& occupiedPositions)
     
     if (!validPosition)
     {
-        std::cerr << "WARNING: Could not find empty spot for food after " 
-                  << MAX_ATTEMPTS << " attempts. Grid may be full." << std::endl;
+        Logger::warn("Could not find empty spot for food after ", 
+                  MAX_ATTEMPTS, " attempts. Grid may be full.");
         pos.x = std::rand() % Config::Grid::WIDTH;
         pos.y = std::rand() % Config::Grid::HEIGHT;
     }

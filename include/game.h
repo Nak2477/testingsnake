@@ -19,6 +19,20 @@ enum class GameState {
     MATCH_END
 };
 
+inline const char* gameStateToString(GameState state) {
+    switch (state) {
+        case GameState::MENU: return "MENU";
+        case GameState::SINGLEPLAYER: return "SINGLEPLAYER";
+        case GameState::MULTIPLAYER: return "MULTIPLAYER";
+        case GameState::LOBBY: return "LOBBY";
+        case GameState::COUNTDOWN: return "COUNTDOWN";
+        case GameState::PAUSED: return "PAUSED";
+        case GameState::PLAYING: return "PLAYING";
+        case GameState::MATCH_END: return "MATCH_END";
+        default: return "UNKNOWN";
+    }
+}
+
 class Game {
     public:
 
@@ -35,7 +49,8 @@ class Game {
         void changeState(GameState newState);
         void changeState(GameState newState, bool fromNetwork);
         void exitState(GameState oldState, bool fromNetwork);
-        void enterState(GameState newState, bool fromNetwork);   
+        void enterState(GameState newState, bool fromNetwork);
+        bool isValidTransition(GameState from, GameState to) const;   
         
         void handleMenuInput(SDL_Keycode key);
         void handleMultiplayerInput(SDL_Keycode key);
@@ -69,6 +84,7 @@ private:
     int menuSelection;
     int pauseMenuSelection;
     int sessionSelection;
+    Uint32 countdownStartTime;
 
     void (Game::*inputHandler)(SDL_Keycode);
 

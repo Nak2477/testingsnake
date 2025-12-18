@@ -92,3 +92,76 @@ message(STATUS "C++ Compiler: ${CMAKE_CXX_COMPILER}")
 message(STATUS "C Compiler: ${CMAKE_C_COMPILER}")
 message(STATUS "SDL2 Include: ${SDL2_INCLUDE_DIRS}")
 message(STATUS "SDL2 Libraries: ${SDL2_LIBRARIES}")
+
+# =============================================================================
+# Unit Testing Setup with Google Test
+# =============================================================================
+option(BUILD_TESTS "Build unit tests" OFF)
+
+if(BUILD_TESTS)
+    enable_testing()
+    
+    # Download and configure Google Test
+    include(FetchContent)
+    FetchContent_Declare(
+        googletest
+        GIT_REPOSITORY https://github.com/google/googletest.git
+        GIT_TAG v1.14.0
+    )
+    
+    # For Windows: Prevent overriding parent project's compiler/linker settings
+    set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(googletest)
+    
+    # Create a library with game logic (no main.cpp)
+    # This allows tests to link against game code without duplicate main()
+    add_library(snake_core STATIC
+        ${SNAKE_CPP_SOURCES}
+    )
+    target_link_libraries(snake_core
+        multiplayer_api
+        jansson
+        ${SDL2_LIBRARIES}
+        SDL2_ttf
+        pthread
+        m
+    )
+    
+    # Test executables
+    add_executable(test_snake tests/test_snake.cpp)
+    target_link_libraries(test_snake
+        snake_core
+        gtest_main
+        gmock
+    )
+    
+    add_executable(test_food tests/test_food.cpp)
+    target_link_libraries(test_food
+        snake_core
+        gtest_main
+        gmock
+    )
+    
+    add_executable(test_collision tests/test_collision.cpp)
+    target_link_libraries(test_collision
+        snake_core
+        gtest_main
+        gmock
+    )
+    
+    add_executable(test_network tests/test_network.cpp)
+    target_link_libraries(test_network
+        snake_core
+        gtest_main
+        gmock
+    )
+    
+    # Register tests with CTest
+    include(GoogleTest)
+    gtest_discover_tests(test_snake)
+    gtest_discover_tests(test_food)
+    gtest_discover_tests(test_collision)
+    gtest_discover_tests(test_network)
+    
+    message(STATUS "Unit tests enabled - run with 'make test' or 'ctest'")
+endif()

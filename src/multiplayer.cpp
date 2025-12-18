@@ -64,13 +64,13 @@ NetworkManager::~NetworkManager() {
 
 bool NetworkManager::initialize(const std::string& host, int port) {
     if (ctx->network.api) {
-        std::cerr << "Network already initialized" << std::endl;
+        Logger::error("Network already initialized");
         return false;
     }
     
     ctx->network.api = mp_api_create(host.c_str(), port);
     if (!ctx->network.api) {
-        std::cerr << "Failed to create multiplayer API" << std::endl;
+        Logger::error("Failed to create multiplayer API");
         return false;
     }
     
@@ -79,7 +79,7 @@ bool NetworkManager::initialize(const std::string& host, int port) {
     
     // Set up event listener
     mp_api_listen(ctx->network.api, on_multiplayer_event, ctx);
-    std::cout << "Network initialized: " << host << ":" << port << std::endl;
+    Logger::info("Network initialized: ", host, ":", port);
     return true;
 }
 
@@ -102,7 +102,7 @@ bool NetworkManager::isConnected() const {
 
 bool NetworkManager::hostSession() {
     if (!ctx->network.api) {
-        std::cerr << "Network not initialized" << std::endl;
+        Logger::error("Network not initialized");
         return false;
     }
     
@@ -110,33 +110,28 @@ bool NetworkManager::hostSession() {
     char* clientId = nullptr;
     json_t* hostData = nullptr;
     
-    std::cout << "Attempting to host session..." << std::endl;
+    Logger::info("Attempting to host session...");
     int rc = mp_api_host(ctx->network.api, &session, &clientId, &hostData);
     
     if (rc != MP_API_OK) {
-        std::cerr << "Failed to host session: " << rc << std::endl;
+        Logger::error("Failed to host session: ", rc);
         return false;
     }
     
-    // Use RAII wrapper for automatic cleanup
     JsonPtr hostDataPtr(hostData);
     
-    // Store session info
     ctx->network.sessionId = session;
     ctx->network.myClientId = clientId;
     ctx->network.isHost = true;
     ctx->network.lastStateSyncSent = SDL_GetTicks();
     
-    std::cout << "Hosting session: " << session << " (clientId: " << clientId << ")" << std::endl;
+    Logger::info("Hosting session: ", session, " (clientId: ", clientId, ")");
     
-    // Add myself as a player
     add_player(*ctx, clientId);
     ctx->players.setMyPlayerIndex(ctx->players.findByClientId(clientId));
     
-    // Initialize match start time as host
     ctx->match.matchStartTime = SDL_GetTicks();
     
-    // Cleanup
     free(session);
     free(clientId);
     
@@ -145,7 +140,7 @@ bool NetworkManager::hostSession() {
 
 bool NetworkManager::listSessions() {
     if (!ctx->network.api) {
-        std::cerr << "Network not initialized" << std::endl;
+        Logger::error("Network not initialized");
         return false;
     }
     
@@ -153,7 +148,7 @@ bool NetworkManager::listSessions() {
     int rc = mp_api_list(ctx->network.api, &sessionList);
     
     if (rc != MP_API_OK) {
-        std::cerr << "Failed to list sessions: " << rc << std::endl;
+        Logger::error("Failed to list sessions: ", rc);
         return false;
     }
     
@@ -163,9 +158,9 @@ bool NetworkManager::listSessions() {
     ctx->network.availableSessions.clear();
     
     if (json_array_size(sessionList) == 0) {
-        std::cout << "No public sessions available." << std::endl;
+        Logger::info("No public sessions available.");
     } else {
-        std::cout << "Available sessions (total: " << json_array_size(sessionList) << "):" << std::endl;
+        Logger::info("Available sessions (total: ", json_array_size(sessionList), "):");
         
         size_t index;
         json_t* value;
@@ -174,7 +169,7 @@ bool NetworkManager::listSessions() {
             if (json_is_string(sessVal)) {
                 const char* sessionId = json_string_value(sessVal);
                 ctx->network.availableSessions.push_back(sessionId);
-                std::cout << " [" << (index + 1) << "] " << sessionId << std::endl;
+                Logger::info(" [", (index + 1), "] ", sessionId);
             }
         }
     }
@@ -184,7 +179,7 @@ bool NetworkManager::listSessions() {
 
 bool NetworkManager::joinSession(const std::string& sessionId) {
     if (!ctx->network.api) {
-        std::cerr << "Network not initialized" << std::endl;
+        Logger::error("Network not initialized");
         return false;
     }
     
@@ -203,7 +198,7 @@ bool NetworkManager::joinSession(const std::string& sessionId) {
     JsonPtr joinDataPtr(joinData);
     
     if (rc != MP_API_OK) {
-        std::cerr << "Failed to join session: " << rc << std::endl;
+        Logger::error("Failed to join session: ", rc);
         return false;
     }
     
@@ -212,7 +207,7 @@ bool NetworkManager::joinSession(const std::string& sessionId) {
     ctx->network.myClientId = joinedClientId;
     ctx->network.isHost = false;
     
-    std::cout << "Joined session: " << joinedSession << " (clientId: " << joinedClientId << ")" << std::endl;
+    Logger::info("Joined session: ", joinedSession, " (clientId: ", joinedClientId, ")");
     
     // Will be assigned player index when host sends state_sync
     ctx->players.setMyPlayerIndex(-1);
@@ -236,8 +231,8 @@ void NetworkManager::processMessages() {
         Uint32 timeSinceLastMessage = currentTime - ctx->network.lastMessageReceived;
         
         if (timeSinceLastMessage > Config::Network::CONNECTION_TIMEOUT_DISCONNECT_MS) {
-            std::cerr << "Connection timeout! No messages for " << (timeSinceLastMessage / 1000) << " seconds" << std::endl;
-            std::cerr << "Disconnecting and returning to menu..." << std::endl;
+            Logger::error("Connection timeout! No messages for ", (timeSinceLastMessage / 1000), " seconds");
+            Logger::error("Disconnecting and returning to menu...");
             
             // Set flag for safe shutdown on next frame (avoid use-after-free)
             ctx->network.connectionLost = true;
@@ -248,7 +243,7 @@ void NetworkManager::processMessages() {
             return;  // Exit immediately, let game loop handle shutdown
         } else if (timeSinceLastMessage > Config::Network::CONNECTION_TIMEOUT_WARNING_MS && ctx->network.connectionWarningTime == 0) {
             ctx->network.connectionWarningTime = currentTime;
-            std::cout << "Warning: No messages received for " << (timeSinceLastMessage / 1000) << " seconds" << std::endl;
+            Logger::info("Warning: No messages received for ", (timeSinceLastMessage / 1000), " seconds");
         } else if (timeSinceLastMessage < Config::Network::CONNECTION_TIMEOUT_WARNING_MS) {
             // Reset warning if connection recovered
             ctx->network.connectionWarningTime = 0;
@@ -307,7 +302,7 @@ void NetworkManager::broadcastGameState(bool critical) {
         // Get const reference to body first and check if empty
         const auto& body = ctx->players[i].snake->getBody();
         if (body.empty()) {
-            std::cerr << "WARNING: Skipping player " << (i+1) << " with empty body in broadcastGameState" << std::endl;
+            Logger::warn("WARNING: Skipping player ", (i+1), " with empty body in broadcastGameState");
             continue;
         }
         
@@ -337,7 +332,7 @@ void NetworkManager::broadcastGameState(bool critical) {
     // Send to all clients
     int result = mp_api_game(ctx->network.api, stateMsg.buildPtr().get());
     if (result != 0) {
-        std::cerr << "ERROR: Failed to broadcast game state, result=" << result << std::endl;
+        Logger::error("ERROR: Failed to broadcast game state, result=", result);
     }
 }
 
@@ -366,7 +361,7 @@ static void on_multiplayer_event( const char *event, int64_t messageId, const ch
             // Check if the leaving player is the host
             if (msg.clientId == ctx->network.hostClientId) {
                 msg.type = NetworkMessageType::HOST_DISCONNECT;
-                std::cout << "Host disconnected: " << msg.clientId << std::endl;
+                Logger::info("Host disconnected: ", msg.clientId);
             }
         }
         
@@ -453,23 +448,23 @@ static void handlePlayerJoined(GameContext& ctx, const std::string& clientId)
         // I'm joining - add myself immediately
         add_player(ctx, clientId);
         ctx.players.setMyPlayerIndex(ctx.players.findByClientId(clientId));
-        std::cout << "I joined as player " << (ctx.players.myPlayerIndex() + 1) << std::endl;
+        Logger::info("I joined as player ", (ctx.players.myPlayerIndex() + 1));
         
         // If I'm the first player and not explicitly host, I'm likely the host
         // (Server makes first joiner the host)
         if (ctx.players.myPlayerIndex() == 0 && !ctx.network.isHost) {
             ctx.network.hostClientId = clientId;
-            std::cout << "Detected as session host (first player)" << std::endl;
+            Logger::info("Detected as session host (first player)");
         }
     } else {
         // Someone else joined - add them
         // If this is the first player joining and we don't know the host yet, they're likely the host
         if (ctx.network.hostClientId.empty() && ctx.players[0].active == false) {
             ctx.network.hostClientId = clientId;
-            std::cout << "Detected host: " << clientId << std::endl;
+            Logger::info("Detected host: ", clientId);
         }
         add_player(ctx, clientId);
-        std::cout << "Player joined: " << clientId << std::endl;
+        Logger::info("Player joined: ", clientId);
     }
     
     // If we're the host, send current game state to new player
@@ -523,12 +518,12 @@ static void handleStateSync(GameContext& ctx, json_t* data)
         
         if (strcmp(stateStr, "PLAYING") == 0) {
             ctx.onStateChange(static_cast<int>(GameState::PLAYING));
-            std::cout << "Host started the match!" << std::endl;
+            Logger::info("Host started the match!");
         } else if (strcmp(stateStr, "LOBBY") == 0) {
             ctx.onStateChange(static_cast<int>(GameState::LOBBY));
         } else if (strcmp(stateStr, "MATCH_END") == 0) {
             ctx.onStateChange(static_cast<int>(GameState::MATCH_END));
-            std::cout << "Match ended!" << std::endl;
+            Logger::info("Match ended!");
         }
     }
     
@@ -572,13 +567,13 @@ static void handleStateSync(GameContext& ctx, json_t* data)
         // Find player name for message
         int pauserIdx = ctx.players.findByClientId(pauserClientId);
         std::string playerName = pauserIdx >= 0 ? "Player " + std::to_string(pauserIdx + 1) : "Someone";
-        std::cout << (isPaused ? (playerName + " paused the game") : (playerName + " resumed the game")) << std::endl;
+        Logger::info((isPaused ? (playerName + " paused the game") : (playerName + " resumed the game")));
     }
     
     // Sync player list
     json_t *playersArray = json_object_get(data, "players");
     if (json_is_array(playersArray)) {
-        std::cout << "Client receiving player list from host..." << std::endl;
+        Logger::debug("Client receiving player list from host...");
         size_t index;
         json_t *playerClientId;
         json_array_foreach(playersArray, index, playerClientId) {
@@ -587,11 +582,11 @@ static void handleStateSync(GameContext& ctx, json_t* data)
                 // Only add if not already present (avoid duplicates)
                 if (ctx.players.findByClientId(pId) < 0) {
                     add_player(ctx, pId);
-                    std::cout << "Added player from state_sync: " << pId << std::endl;
+                    Logger::info("Added player from state_sync: ", pId);
                     // If this is me, set my index
                     if (pId == ctx.network.myClientId && ctx.players.myPlayerIndex() < 0) {
                         ctx.players.setMyPlayerIndex(ctx.players.findByClientId(pId));
-                        std::cout << "I am player " << (ctx.players.myPlayerIndex() + 1) << std::endl;
+                        Logger::info("I am player ", (ctx.players.myPlayerIndex() + 1));
                     }
                 }
             }
@@ -606,7 +601,7 @@ void NetworkManager::sendGameMessage(json_t* message)
     
     int rc = mp_api_game(ctx->network.api, message);
     if (rc != MP_API_OK) {
-        std::cerr << "Failed to send game message: " << rc << std::endl;
+        Logger::error("Failed to send game message: ", rc);
     }
 }
 
@@ -727,7 +722,7 @@ static void add_player(GameContext& ctx, const std::string& clientId)
             ctx.players[i].active = true;
             ctx.players[i].lastMpSent = 0;
             
-            std::cout << "Player " << (i+1) << " joined: " << clientId << std::endl;
+            Logger::info("Player ", (i+1), " joined: ", clientId);
             break;
         }
     }
@@ -742,7 +737,7 @@ static void remove_player(GameContext& ctx, const std::string& clientId)
             ctx.players[i].active = false;
             ctx.players[i].snake = nullptr;
             ctx.players[i].clientId = "";
-            std::cout << "Player " << (i+1) << " left" << std::endl;
+            Logger::info("Player ", (i+1), " left");
             break;
         }
     }
@@ -775,12 +770,12 @@ static void sendFullStateSync(GameContext& ctx)
     mp_api_game(ctx.network.api, gameUpdate.get());
     ctx.network.lastStateSyncSent = SDL_GetTicks();
     
-    std::cout << "Sent periodic full state sync" << std::endl;
+    Logger::debug("Sent periodic full state sync");
 }
 
 static void handleHostDisconnect(GameContext& ctx)
 {
-    std::cout << "HOST HAS DISCONNECTED!" << std::endl;
+    Logger::info("HOST HAS DISCONNECTED!");
     if (ctx.onStateChange) {
         ctx.onStateChange(static_cast<int>(GameState::MENU));
     }

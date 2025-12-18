@@ -18,12 +18,12 @@ MenuRender::MenuRender()
         std::lock_guard<std::mutex> lock(sdlInitMutex);
         if (!sdlInitialized.load()) {
             if (SDL_Init(SDL_INIT_VIDEO) < 0) {
-                std::cerr << "SDL init failed: " << SDL_GetError() << std::endl;
+                Logger::error("SDL init failed: ", SDL_GetError());
                 throw std::runtime_error("SDL initialization failed");
             }
 
             if (TTF_Init() == -1) {
-                std::cerr << "SDL_ttf init failed: " << TTF_GetError() << std::endl;
+                Logger::error("SDL_ttf init failed: ", TTF_GetError());
                 SDL_Quit();
                 throw std::runtime_error("SDL_ttf initialization failed");
             }
@@ -42,7 +42,7 @@ MenuRender::MenuRender()
     );
 
     if (!window) {
-        std::cerr << "Window creation failed: " << SDL_GetError() << std::endl;
+        Logger::error("Window creation failed: ", SDL_GetError());
         TTF_Quit();
         SDL_Quit();
         throw std::runtime_error("Window creation failed");
@@ -50,7 +50,7 @@ MenuRender::MenuRender()
 
     renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
     if (!renderer) {
-        std::cerr << "Renderer creation failed: " << SDL_GetError() << std::endl;
+        Logger::error("Renderer creation failed: ", SDL_GetError());
         SDL_DestroyWindow(window);
         TTF_Quit();
         SDL_Quit();
@@ -63,7 +63,7 @@ MenuRender::MenuRender()
     titleFont = TTF_OpenFont("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 36);
     
     if (!font) {
-        std::cerr << "Font load failed: " << TTF_GetError() << std::endl;
+        Logger::error("Font load failed: ", TTF_GetError());
         font = nullptr;
     }
     if (!titleFont) titleFont = font;

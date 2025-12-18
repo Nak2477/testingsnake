@@ -5,7 +5,7 @@
 Game::Game() 
     : state(GameState::MENU), quit(false),
       updateInterval(Config::Game::INITIAL_SPEED_MS), menuSelection(0), pauseMenuSelection(0),
-      sessionSelection(0), inputHandler(&Game::handleMenuInput)
+      sessionSelection(0), countdownStartTime(0), inputHandler(&Game::handleMenuInput)
 {
     // Initialize logger
     Logger::init("hardcoresnake.log", LogLevel::INFO, true);
@@ -102,6 +102,16 @@ void Game::update()
         }
     }
     
+    // Handle countdown state transition
+    if (state == GameState::COUNTDOWN) {
+        Uint32 currentTime = SDL_GetTicks();
+        Uint32 elapsed = currentTime - countdownStartTime;
+        if (elapsed >= 3000) {  // 3 seconds countdown
+            changeState(GameState::PLAYING);
+        }
+        return;
+    }
+    
     // Only update game logic when playing or paused
     if (state != GameState::PLAYING && state != GameState::PAUSED)
         return;
@@ -155,10 +165,14 @@ void Game::render()
             ui->renderLobby(ctx.players.getSlots(), networkManager->getNetworkContext().isHost);
             break;
             
-        case GameState::COUNTDOWN:
+        case GameState::COUNTDOWN: {
             ui->renderGame(ctx, false);
-            // ui->renderCountdown(countdownSeconds); // TODO: Need to track countdown timer
+            Uint32 elapsed = SDL_GetTicks() - countdownStartTime;
+            int remaining = 3 - (elapsed / 1000);
+            if (remaining < 0) remaining = 0;
+            ui->renderCountdown(remaining);
             break;
+        }
             
         case GameState::PLAYING:
             ui->renderGame(ctx, false);
@@ -183,9 +197,63 @@ void Game::changeState(GameState newState)
     changeState(newState, false);
 }
 
+bool Game::isValidTransition(GameState from, GameState to) const
+{
+    // Allow staying in same state
+    if (from == to) return true;
+    
+    // Valid state transition table
+    switch (from) {
+        case GameState::MENU:
+            // From MENU: can go to SINGLEPLAYER, MULTIPLAYER setup, or directly to PLAYING (singleplayer)
+            return to == GameState::SINGLEPLAYER || to == GameState::MULTIPLAYER || to == GameState::PLAYING;
+            
+        case GameState::SINGLEPLAYER:
+            // From SINGLEPLAYER: can start playing or return to menu
+            return to == GameState::PLAYING || to == GameState::MENU;
+            
+        case GameState::MULTIPLAYER:
+            // From MULTIPLAYER: can join lobby or return to menu
+            return to == GameState::LOBBY || to == GameState::MENU;
+            
+        case GameState::LOBBY:
+            // From LOBBY: can start countdown, go directly to playing, or return to menu/multiplayer
+            return to == GameState::COUNTDOWN || to == GameState::PLAYING || to == GameState::MENU || to == GameState::MULTIPLAYER;
+            
+        case GameState::COUNTDOWN:
+            // From COUNTDOWN: must go to playing (or back to lobby if cancelled)
+            return to == GameState::PLAYING || to == GameState::LOBBY;
+            
+        case GameState::PLAYING:
+            // From PLAYING: can pause, end match, or return to menu (disconnect)
+            return to == GameState::PAUSED || to == GameState::MATCH_END || to == GameState::MENU;
+            
+        case GameState::PAUSED:
+            // From PAUSED: can resume or quit to menu
+            return to == GameState::PLAYING || to == GameState::MENU;
+            
+        case GameState::MATCH_END:
+            // From MATCH_END: can only return to menu or lobby (for rematch)
+            return to == GameState::MENU || to == GameState::LOBBY;
+    }
+    
+    return false;
+}
+
 void Game::changeState(GameState newState, bool fromNetwork)
 {
     GameState oldState = state;
+    
+    // Validate transition
+    if (!isValidTransition(oldState, newState)) {
+        Logger::error("Invalid state transition: ", 
+                     gameStateToString(oldState), " -> ", gameStateToString(newState));
+        return;  // Reject invalid transition
+    }
+    
+    Logger::info("State transition: ", 
+                gameStateToString(oldState), " -> ", gameStateToString(newState));
+    
     exitState(oldState, fromNetwork);
     enterState(newState, fromNetwork);
     state = newState;
@@ -234,6 +302,11 @@ void Game::enterState(GameState newState, bool fromNetwork)
             
         case GameState::LOBBY:
             inputHandler = &Game::handleLobbyInput;
+            break;
+        
+        case GameState::COUNTDOWN:
+            countdownStartTime = SDL_GetTicks();
+            inputHandler = nullptr;  // No input during countdown
             break;
             
         case GameState::PAUSED:
@@ -328,18 +401,18 @@ void Game::handleMenuInput(SDL_Keycode key)
                 food.spawn(occupiedPositions);
                 
                 changeState(GameState::PLAYING);
-                std::cout << "Started singleplayer mode" << std::endl;
+                Logger::info("Started singleplayer mode");
             }
             else if (menuSelection == 1)
             {  // Multiplayer
                 if (networkManager->initialize(Config::Network::DEFAULT_HOST, Config::Network::DEFAULT_PORT))
                 {
-                    state = GameState::MULTIPLAYER;
+                    changeState(GameState::MULTIPLAYER);
                     inputHandler = &Game::handleMultiplayerInput;
-                    std::cout << "Multiplayer - Press H to host or L to list sessions" << std::endl;
+                    Logger::info("Multiplayer - Press H to host or L to list sessions");
                     return;
                 }
-                std::cerr << "Failed to create multiplayer API" << std::endl;
+                Logger::error("Failed to create multiplayer API");
             }
             else if (menuSelection == 2)
             {  // Quit
@@ -359,7 +432,7 @@ void Game::handleMultiplayerInput(SDL_Keycode key)
         case SDLK_h:
             if (networkManager->isConnected() && networkManager->getNetworkContext().sessionId.empty()) {
                 if (networkManager->hostSession()) {
-                    state = GameState::LOBBY;
+                    changeState(GameState::LOBBY);
                     inputHandler = &Game::handleLobbyInput;
                 }
             }
@@ -367,7 +440,9 @@ void Game::handleMultiplayerInput(SDL_Keycode key)
         case SDLK_l:
             if (networkManager->isConnected() && networkManager->getNetworkContext().sessionId.empty()) {
                 sessionSelection = 0;  // Reset selection when listing
-                networkManager->listSessions();
+                if (!networkManager->listSessions()) {
+                    Logger::error("Failed to request session list");
+                }
             }
             break;
         case SDLK_UP:
@@ -387,9 +462,9 @@ void Game::handleMultiplayerInput(SDL_Keycode key)
                 const auto& sessions = networkManager->getNetworkContext().availableSessions;
                 if (sessionSelection < (int)sessions.size())
                 {
-                    std::cout << "Joining session: " << sessions[sessionSelection] << std::endl;
+                    Logger::info("Joining session: ", sessions[sessionSelection]);
                     if (networkManager->joinSession(sessions[sessionSelection])) {
-                        state = GameState::LOBBY;
+                        changeState(GameState::LOBBY);
                         inputHandler = &Game::handleLobbyInput;
                     }
                 }
@@ -407,7 +482,7 @@ void Game::handleLobbyInput(SDL_Keycode key)
     {
         case SDLK_SPACE:
             if (networkManager->getNetworkContext().isHost) {
-                changeState(GameState::PLAYING);
+                changeState(GameState::COUNTDOWN);
             }
             break;
         case SDLK_ESCAPE:
@@ -552,7 +627,7 @@ void Game::checkMatchTimer(Uint32 currentTime)
                 networkManager->sendGameMessage(endUpdate.get());
             }
             
-            state = GameState::MATCH_END;
+            changeState(GameState::MATCH_END);
             
             // Find winner - longest snake
             int maxLength = 0;
@@ -592,16 +667,16 @@ void Game::checkMatchTimer(Uint32 currentTime)
                 }
             }
             
-            std::cout << "Match ended! ";
+            Logger::info("Match ended!");
             if (ctx.match.winnerIndex >= 0 && 
                 ctx.match.winnerIndex < Config::Game::MAX_PLAYERS &&
                 ctx.players.isValid(ctx.match.winnerIndex))
             {
-                std::cout << "Winner: Player " << (ctx.match.winnerIndex + 1) 
-                         << " (Length: " << ctx.players[ctx.match.winnerIndex].snake->getBody().size()
-                         << ", Score: " << ctx.players[ctx.match.winnerIndex].snake->getScore() << ")" << std::endl;
+                Logger::info("Winner: Player ", (ctx.match.winnerIndex + 1), 
+                         " (Length: ", ctx.players[ctx.match.winnerIndex].snake->getBody().size(),
+                         ", Score: ", ctx.players[ctx.match.winnerIndex].snake->getScore(), ")");
             } else {
-                std::cout << "No winner (no active players)" << std::endl;
+                Logger::info("No winner (no active players)");
             }
         }
     }
@@ -619,10 +694,8 @@ void Game::updatePlayers()
             }
             return;
         }
-        if (occupiedPositions.empty())
-        {
-            buildCollisionMap();
-        }
+        // Always rebuild collision map at start of each update to ensure it's current
+        buildCollisionMap();
         
         struct MoveInfo {
             Position oldHead;
@@ -645,7 +718,7 @@ void Game::updatePlayers()
             const auto& body = ctx.players[i].snake->getBody();
             if (body.empty())
             {
-                std::cerr << "ERROR: Player " << (i+1) << " has empty snake body!" << std::endl;
+                Logger::error("Player ", (i+1), " has empty snake body!");
                 moves[i].processed = false;
                 continue;
             }
@@ -685,14 +758,14 @@ void Game::updatePlayers()
                             // Moving into our own tail - allowed, tail will move
                         } else {
                             moves[i].collision = true;
-                            std::cout << "Player " << (i+1) << " collision at (" 
-                                      << moves[i].newHead.x << "," << moves[i].newHead.y << ")" << std::endl;
+                            Logger::debug("Player ", (i+1), " collision at (", 
+                                      moves[i].newHead.x, ",", moves[i].newHead.y, ")");
                         }
                     } else {
                         // Growing: can't move into ANY occupied cell
                         moves[i].collision = true;
-                        std::cout << "Player " << (i+1) << " collision at (" 
-                                  << moves[i].newHead.x << "," << moves[i].newHead.y << ")" << std::endl;
+                        Logger::debug("Player ", (i+1), " collision at (", 
+                                  moves[i].newHead.x, ",", moves[i].newHead.y, ")");
                     }
                 }
             }
@@ -705,7 +778,7 @@ void Game::updatePlayers()
             
             if (moves[i].collision) {
                 respawnPlayer(i);
-                std::cout << "Player " << (i+1) << " died and respawned!" << std::endl;
+                Logger::info("Player ", (i+1), " died and respawned!");
                 needRebuild = true;
             } else {
                 // Update collision map incrementally
@@ -724,7 +797,7 @@ void Game::updatePlayers()
                     // Snake grew - tail stays
                     ctx.players[i].snake->grow();
                     food.spawn(occupiedPositions);
-                    std::cout << "Player " << (i+1) << " ate food!" << std::endl;
+                    Logger::debug("Player ", (i+1), " ate food!");
                     
                     if (networkManager->isConnected()) {
                         networkManager->broadcastGameState();
@@ -795,7 +868,7 @@ void Game::resetMatch()
     
     changeState(GameState::PLAYING);
     
-    std::cout << "Game reset!" << std::endl;
+    Logger::info("Game reset!");
 }
 
 void Game::buildCollisionMap()

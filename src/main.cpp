@@ -10,7 +10,7 @@ int main() {
         Game game;
         game.run();
     } catch (const std::exception& e) {
-        std::cerr << "Error: " << e.what() << std::endl;
+        Logger::fatal("Error: ", e.what());
         return 1;
     }
     
