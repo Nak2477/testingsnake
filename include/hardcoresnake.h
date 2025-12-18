@@ -19,6 +19,10 @@ enum class Direction {
     NONE
 };
 
+// Direction utility functions
+const char* directionToString(Direction dir);
+Direction stringToDirection(const char* str);
+
 struct Position {
     int x;
     int y;
@@ -27,6 +31,9 @@ struct Position {
         return x == other.x && y == other.y;
     }
 };
+
+// Utility function to generate random spawn positions
+Position getRandomSpawnPositionUtil(const std::unordered_map<int, bool>& occupiedPositions);
 
 
 class Snake {

@@ -18,7 +18,7 @@ class MenuRender
         
         // Game rendering methods (merged from GameRender)
         void renderGame(const struct GameContext& ctx, bool matchEnded);
-        void renderPlayers(const std::array<PlayerSlot, 4>& players);
+        void renderPlayers(const std::array<PlayerSlot, Config::Game::MAX_PLAYERS>& players);
         void renderFood(const Food& food);
         void renderHUD(int score, int remainingSeconds, const std::string& sessionId);
         void clearScreen();
@@ -29,10 +29,10 @@ class MenuRender
         // Menu screens for different game states
         void renderMenu(int menuSelection);           // Main menu (MENU state)
         void renderSessionBrowser(const std::vector<std::string>& sessions, int selectedIndex, bool isConnected);  // Session browser
-        void renderLobby(const std::array<PlayerSlot, 4>& players, bool isHost);  // LOBBY state
+        void renderLobby(const std::array<PlayerSlot, Config::Game::MAX_PLAYERS>& players, bool isHost);  // LOBBY state
         void renderCountdown(int seconds);            // COUNTDOWN state
         void renderPauseMenu(int selection);         // Pause overlay during PLAYING
-        void renderMatchEnd(int winnerIndex, const std::array<PlayerSlot, 4>& players);  // MATCH_END state
+        void renderMatchEnd(int winnerIndex, const std::array<PlayerSlot, Config::Game::MAX_PLAYERS>& players);  // MATCH_END state
         
         
         SDL_Renderer* getRenderer() { return renderer; }

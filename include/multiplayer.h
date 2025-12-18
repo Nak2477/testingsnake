@@ -16,7 +16,6 @@ extern "C" {
     #include "../libs/jansson/jansson.h"
 }
 
-// Forward declarations
 enum class GameState;  // Avoid circular dependency with game.h
 
 // RAII wrapper for json_t to prevent memory leaks
@@ -133,7 +132,6 @@ struct NetworkMessage {
     std::string jsonData;  // Serialized JSON as string
 };
 
-// Thread-safe message queue
 class NetworkMessageQueue {
 private:
     std::queue<NetworkMessage> messages;
@@ -171,9 +169,10 @@ struct NetworkContext {
     Uint32 lastStateSyncSent;  // Host: last time full state was broadcast
     Uint32 lastMessageReceived;  // Last time we received any message from server
     Uint32 connectionWarningTime;  // Time when we first detected connection issue
+    bool connectionLost;  // Flag to trigger safe shutdown on next frame
     
     NetworkContext() : api(nullptr), isHost(false), lastStateSyncSent(0),
-                       lastMessageReceived(0), connectionWarningTime(0) {}
+                       lastMessageReceived(0), connectionWarningTime(0), connectionLost(false) {}
 };
 
 // Match timing and state management
@@ -194,7 +193,7 @@ struct MatchState {
 // Player management with proper encapsulation
 class PlayerManager {
 private:
-    std::array<PlayerSlot, 4> slots;
+    std::array<PlayerSlot, Config::Game::MAX_PLAYERS> slots;
     int myIndex;
     
 public:
@@ -205,8 +204,8 @@ public:
     const PlayerSlot& operator[](int i) const { return slots[i]; }
     
     // Direct access to underlying array (for render functions that need it)
-    std::array<PlayerSlot, 4>& getSlots() { return slots; }
-    const std::array<PlayerSlot, 4>& getSlots() const { return slots; }
+    std::array<PlayerSlot, Config::Game::MAX_PLAYERS>& getSlots() { return slots; }
+    const std::array<PlayerSlot, Config::Game::MAX_PLAYERS>& getSlots() const { return slots; }
     
     // Convenience accessors for "my player"
     PlayerSlot& me() { return slots[myIndex]; }
@@ -217,12 +216,12 @@ public:
     
     // Validation
     bool isValid(int i) const { 
-        return i >= 0 && i < 4 && slots[i].active && slots[i].snake; 
+        return i >= 0 && i < Config::Game::MAX_PLAYERS && slots[i].active && slots[i].snake; 
     }
     
     // Search operations
     int findByClientId(const std::string& id) const {
-        for (int i = 0; i < 4; i++) {
+        for (int i = 0; i < Config::Game::MAX_PLAYERS; i++) {
             if (slots[i].active && slots[i].clientId == id) return i;
         }
         return -1;
@@ -244,94 +243,42 @@ public:
     }
 };
 
-// Main game context - composition of focused components
 struct GameContext {
     NetworkContext network;
     MatchState match;
     PlayerManager players;
     Food* food;
-    std::function<void(int)> onStateChange;  // Type-safe callback for state changes (receives GameState as int)
+    std::function<void(int)> onStateChange;
     
     GameContext() : food(nullptr) {}
 };
 
-// ========== INTERFACE ABSTRACTION ==========
-
-// Interface for network management operations
-// This allows for easier testing (mock implementations) and decoupling
-class INetworkManager {
-public:
-    virtual ~INetworkManager() = default;
-    
-    // Connection management
-    virtual bool initialize(const std::string& host, int port) = 0;
-    virtual void shutdown() = 0;
-    virtual bool isConnected() const = 0;
-    
-    // Session management
-    virtual bool hostSession() = 0;
-    virtual bool listSessions() = 0;
-    virtual bool joinSession(const std::string& sessionId) = 0;
-    virtual const std::vector<std::string>& getAvailableSessions() const = 0;
-    
-    // State queries
-    virtual bool isHost() const = 0;
-    virtual bool isInSession() const = 0;
-    virtual const std::string& getSessionId() const = 0;
-    virtual const std::string& getMyClientId() const = 0;
-    
-    // Message processing
-    virtual void processMessages() = 0;
-    
-    // Game state updates
-    virtual void sendPauseState(bool paused, const std::string& clientId) = 0;
-    virtual void sendGameMessage(json_t* message) = 0;  // Send arbitrary game message
-    
-    // Authoritative server methods
-    virtual void sendPlayerInput(Direction direction) = 0;  // Client sends input to host
-    virtual void broadcastGameState() = 0;  // Host broadcasts complete state to all clients
-    virtual void sendPeriodicStateSync() = 0;  // Host: periodic full state broadcast
-    
-    // Access to internal context (for gradual migration)
-    virtual NetworkContext& getNetworkContext() = 0;
-    virtual const NetworkContext& getNetworkContext() const = 0;
-};
-
-// Concrete implementation of network manager
-class NetworkManager : public INetworkManager {
+class NetworkManager {
 private:
-    GameContext* ctx;  // Pointer to game context
+    GameContext* ctx;
     
 public:
     explicit NetworkManager(GameContext* context) : ctx(context) {}
-    ~NetworkManager() override;
+    ~NetworkManager();
     
-    // INetworkManager interface implementation
-    bool initialize(const std::string& host, int port) override;
-    void shutdown() override;
-    bool isConnected() const override;
+    bool initialize(const std::string& host, int port);
+    void shutdown();
+    bool isConnected() const;
     
-    bool hostSession() override;
-    bool listSessions() override;
-    bool joinSession(const std::string& sessionId) override;
-    const std::vector<std::string>& getAvailableSessions() const override;
+    bool hostSession();
+    bool listSessions();
+    bool joinSession(const std::string& sessionId);
     
-    bool isHost() const override;
-    bool isInSession() const override;
-    const std::string& getSessionId() const override;
-    const std::string& getMyClientId() const override;
+    void processMessages();
     
-    void processMessages() override;
+    void sendPauseState(bool paused, const std::string& clientId);
+    void sendGameMessage(json_t* message);
     
-    void sendPauseState(bool paused, const std::string& clientId) override;
-    void sendGameMessage(json_t* message) override;
+    void sendPlayerInput(Direction direction);
+    void broadcastGameState();
+    void sendPeriodicStateSync();
     
-    // Authoritative server methods
-    void sendPlayerInput(Direction direction) override;  // Client sends input to host
-    void broadcastGameState() override;  // Host broadcasts complete state to all clients
-    void sendPeriodicStateSync();  // Host: periodic full state broadcast
-    
-    NetworkContext& getNetworkContext() override { return ctx->network; }
-    const NetworkContext& getNetworkContext() const override { return ctx->network; }
+    NetworkContext& getNetworkContext() { return ctx->network; }
+    bool isHost() const { return isConnected() && ctx->network.isHost; }
+    const NetworkContext& getNetworkContext() const { return ctx->network; }
 };
-

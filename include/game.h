@@ -48,28 +48,26 @@ class Game {
         void respawnPlayer(int playerIndex);
         void resetMatch();
         // Helpers
-        bool isPlayerValid(int index) const { return ctx.players.isValid(index); }
+        void navigateMenu(int& selection, int maxItems, bool up);
+        Position getRandomSpawnPosition();
         void buildCollisionMap();
         void resetGameState();
 
 private:
 
-    MenuRender* ui;
-
-    // Game state
     GameContext ctx;
-    std::unique_ptr<INetworkManager> networkManager;  // Network abstraction
+    std::unique_ptr<MenuRender> ui;
+    std::unique_ptr<NetworkManager> networkManager;
     Food food;
     std::unordered_map<int, bool> occupiedPositions;
     GameState state;
 
-    // Game loop state
     bool quit;
     Uint32 lastUpdate;
     int updateInterval;
     int menuSelection;
     int pauseMenuSelection;
-    int sessionSelection;  // Selected session index for multiplayer
+    int sessionSelection;
 
     void (Game::*inputHandler)(SDL_Keycode);
 

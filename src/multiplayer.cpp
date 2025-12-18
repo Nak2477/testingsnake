@@ -15,14 +15,38 @@ static void handlePlayerInput(GameContext& ctx, const std::string& clientId, jso
 static void handleGameState(GameContext& ctx, json_t* data);
 static void sendGlobalPauseState(GameContext& ctx, bool paused, const std::string& pauserClientId);
 static void add_player(GameContext& ctx, const std::string& clientId);
-static int find_player_by_client_id(const GameContext& ctx, const std::string& clientId);
 static void remove_player(GameContext& ctx, const std::string& clientId);
 static void sendFullStateSync(GameContext& ctx);
 static void handleHostDisconnect(GameContext& ctx);
 
 // ========== CONSTANTS ==========
 
-// Player spawn positions and colors from Config
+
+
+// Helper to build collision map from game context
+static std::unordered_map<int, bool> buildCollisionMap(const GameContext& ctx) {
+    std::unordered_map<int, bool> occupiedPositions;
+    for (int k = 0; k < Config::Game::MAX_PLAYERS; k++) {
+        if (ctx.players.isValid(k)) {
+            for (const auto& segment : ctx.players[k].snake->getBody()) {
+                occupiedPositions[segment.y * Config::Grid::WIDTH + segment.x] = true;
+            }
+        }
+    }
+    return occupiedPositions;
+}
+
+// Helper to build JSON array of player client IDs
+static json_t* buildPlayerClientIdList(const GameContext& ctx) {
+    json_t* playersArray = json_array();
+    for (int i = 0; i < Config::Game::MAX_PLAYERS; i++) {
+        if (ctx.players[i].active && !ctx.players[i].clientId.empty()) {
+            json_array_append_new(playersArray, json_string(ctx.players[i].clientId.c_str()));
+        }
+    }
+    return playersArray;
+}
+
 // Positions: Config::Spawn::PLAYER_SPAWN_X/Y[i]
 // Colors: Config::Render::PLAYER_COLORS[i]
 
@@ -101,7 +125,7 @@ bool NetworkManager::hostSession() {
     
     // Add myself as a player
     add_player(*ctx, clientId);
-    ctx->players.setMyPlayerIndex(find_player_by_client_id(*ctx, clientId));
+    ctx->players.setMyPlayerIndex(ctx->players.findByClientId(clientId));
     
     // Initialize match start time as host
     ctx->match.matchStartTime = SDL_GetTicks();
@@ -194,26 +218,6 @@ bool NetworkManager::joinSession(const std::string& sessionId) {
     return true;
 }
 
-const std::vector<std::string>& NetworkManager::getAvailableSessions() const {
-    return ctx->network.availableSessions;
-}
-
-bool NetworkManager::isHost() const {
-    return ctx->network.isHost;
-}
-
-bool NetworkManager::isInSession() const {
-    return !ctx->network.sessionId.empty();
-}
-
-const std::string& NetworkManager::getSessionId() const {
-    return ctx->network.sessionId;
-}
-
-const std::string& NetworkManager::getMyClientId() const {
-    return ctx->network.myClientId;
-}
-
 void NetworkManager::processMessages() {
     if (!ctx || !ctx->network.api)
         return;
@@ -229,11 +233,13 @@ void NetworkManager::processMessages() {
             std::cerr << "Connection timeout! No messages for " << (timeSinceLastMessage / 1000) << " seconds" << std::endl;
             std::cerr << "Disconnecting and returning to menu..." << std::endl;
             
-            // Trigger disconnect
+            // Set flag for safe shutdown on next frame (avoid use-after-free)
+            ctx->network.connectionLost = true;
+            
             if (ctx->onStateChange) {
                 ctx->onStateChange(static_cast<int>(GameState::MENU));
             }
-            shutdown();
+            return;  // Exit immediately, let game loop handle shutdown
         } else if (timeSinceLastMessage > Config::Network::CONNECTION_TIMEOUT_WARNING_MS && ctx->network.connectionWarningTime == 0) {
             ctx->network.connectionWarningTime = currentTime;
             std::cout << "Warning: No messages received for " << (timeSinceLastMessage / 1000) << " seconds" << std::endl;
@@ -252,19 +258,9 @@ void NetworkManager::sendPlayerInput(Direction direction) {
     if (!ctx->network.api || ctx->network.sessionId.empty())
         return;
     
-    // Convert direction enum to string
-    const char* dirStr = "NONE";
-    switch (direction) {
-        case Direction::UP:    dirStr = "UP"; break;
-        case Direction::DOWN:  dirStr = "DOWN"; break;
-        case Direction::LEFT:  dirStr = "LEFT"; break;
-        case Direction::RIGHT: dirStr = "RIGHT"; break;
-        default: break;
-    }
-    
     auto inputMsg = JsonBuilder()
         .set("type", "player_input")
-        .set("direction", dirStr)
+        .set("direction", directionToString(direction))
         .buildPtr();
     
     mp_api_game(ctx->network.api, inputMsg.get());
@@ -303,7 +299,7 @@ void NetworkManager::broadcastGameState() {
     
     // All player positions
     JsonPtr playersArray(json_array());
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < Config::Game::MAX_PLAYERS; i++) {
         if (!ctx->players[i].active || !ctx->players[i].snake)
             continue;
         
@@ -455,7 +451,7 @@ static void handlePlayerJoined(GameContext& ctx, const std::string& clientId)
     if (isMe) {
         // I'm joining - add myself immediately
         add_player(ctx, clientId);
-        ctx.players.setMyPlayerIndex(find_player_by_client_id(ctx, clientId));
+        ctx.players.setMyPlayerIndex(ctx.players.findByClientId(clientId));
         std::cout << "I joined as player " << (ctx.players.myPlayerIndex() + 1) << std::endl;
         
         // If I'm the first player and not explicitly host, I'm likely the host
@@ -484,13 +480,7 @@ static void handlePlayerJoined(GameContext& ctx, const std::string& clientId)
         json_object_set_new(gameUpdate.get(), "matchStartTime", json_integer(ctx.match.matchStartTime));
         
         // Add existing players info
-        JsonPtr playersArray(json_array());
-        for (int i = 0; i < 4; i++) {
-            if (ctx.players[i].active && !ctx.players[i].clientId.empty()) {
-                json_array_append_new(playersArray.get(), json_string(ctx.players[i].clientId.c_str()));
-            }
-        }
-        json_object_set_new(gameUpdate.get(), "players", playersArray.release());
+        json_object_set_new(gameUpdate.get(), "players", buildPlayerClientIdList(ctx));
         
         mp_api_game(ctx.network.api, gameUpdate.get());
     }
@@ -559,7 +549,7 @@ static void handleStateSync(GameContext& ctx, json_t* data)
         }
         
         // Apply pause state to all players
-        for (int i = 0; i < 4; i++) {
+        for (int i = 0; i < Config::Game::MAX_PLAYERS; i++) {
             if (ctx.players[i].active) {
                 ctx.players[i].paused = isPaused;
             }
@@ -579,7 +569,7 @@ static void handleStateSync(GameContext& ctx, json_t* data)
         ctx.match.pausedByClientId = isPaused ? pauserClientId : "";
         
         // Find player name for message
-        int pauserIdx = find_player_by_client_id(ctx, pauserClientId);
+        int pauserIdx = ctx.players.findByClientId(pauserClientId);
         std::string playerName = pauserIdx >= 0 ? "Player " + std::to_string(pauserIdx + 1) : "Someone";
         std::cout << (isPaused ? (playerName + " paused the game") : (playerName + " resumed the game")) << std::endl;
     }
@@ -594,12 +584,12 @@ static void handleStateSync(GameContext& ctx, json_t* data)
             if (json_is_string(playerClientId)) {
                 std::string pId = json_string_value(playerClientId);
                 // Only add if not already present (avoid duplicates)
-                if (find_player_by_client_id(ctx, pId) < 0) {
+                if (ctx.players.findByClientId(pId) < 0) {
                     add_player(ctx, pId);
                     std::cout << "Added player from state_sync: " << pId << std::endl;
                     // If this is me, set my index
                     if (pId == ctx.network.myClientId && ctx.players.myPlayerIndex() < 0) {
-                        ctx.players.setMyPlayerIndex(find_player_by_client_id(ctx, pId));
+                        ctx.players.setMyPlayerIndex(ctx.players.findByClientId(pId));
                         std::cout << "I am player " << (ctx.players.myPlayerIndex() + 1) << std::endl;
                     }
                 }
@@ -639,19 +629,13 @@ static void handlePlayerInput(GameContext& ctx, const std::string& clientId, jso
     // Only host processes inputs!
     if (!ctx.network.isHost) return;
     
-    int playerIdx = find_player_by_client_id(ctx, clientId);
+    int playerIdx = ctx.players.findByClientId(clientId);
     if (playerIdx < 0 || !ctx.players[playerIdx].snake) return;
     
     json_t* dirVal = json_object_get(data, "direction");
     if (!json_is_string(dirVal)) return;
     
-    const char* dirStr = json_string_value(dirVal);
-    Direction dir = Direction::NONE;
-    
-    if (strcmp(dirStr, "UP") == 0)    dir = Direction::UP;
-    else if (strcmp(dirStr, "DOWN") == 0)  dir = Direction::DOWN;
-    else if (strcmp(dirStr, "LEFT") == 0)  dir = Direction::LEFT;
-    else if (strcmp(dirStr, "RIGHT") == 0) dir = Direction::RIGHT;
+    Direction dir = stringToDirection(json_string_value(dirVal));
     
     if (dir != Direction::NONE)
     {
@@ -683,7 +667,7 @@ static void handleGameState(GameContext& ctx, json_t* data)
             int playerIdx = (int)json_integer_value(json_object_get(playerObj, "index"));
             bool alive = json_boolean_value(json_object_get(playerObj, "alive"));
             
-            if (playerIdx < 0 || playerIdx >= 4)
+            if (playerIdx < 0 || playerIdx >= Config::Game::MAX_PLAYERS)
             continue;
             if (!ctx.players[playerIdx].snake)
             continue;
@@ -718,11 +702,14 @@ static void handleGameState(GameContext& ctx, json_t* data)
 
 static void add_player(GameContext& ctx, const std::string& clientId)
 {
-    for (int i = 0; i < 4; i++)
+    for (int i = 0; i < Config::Game::MAX_PLAYERS; i++)
     {
         if (!ctx.players[i].active)
         {
-            Position spawnPos = {Config::Spawn::PLAYER_SPAWN_X[i], Config::Spawn::PLAYER_SPAWN_Y[i]};
+            // Build collision map and get random spawn position
+            auto occupiedPositions = buildCollisionMap(ctx);
+            Position spawnPos = getRandomSpawnPositionUtil(occupiedPositions);
+            
             ctx.players[i].snake = std::make_unique<Snake>(Config::Render::PLAYER_COLORS[i], spawnPos);
             ctx.players[i].clientId = clientId;
             ctx.players[i].active = true;
@@ -734,21 +721,9 @@ static void add_player(GameContext& ctx, const std::string& clientId)
     }
 }
 
-static int find_player_by_client_id(const GameContext& ctx, const std::string& clientId)
-{
-    for (int i = 0; i < 4; i++)
-    {
-        if (ctx.players[i].active && ctx.players[i].clientId == clientId)
-        {
-            return i;
-        }
-    }
-    return -1;
-}
-
 static void remove_player(GameContext& ctx, const std::string& clientId)
 {
-    for (int i = 0; i < 4; i++)
+    for (int i = 0; i < Config::Game::MAX_PLAYERS; i++)
     {
         if (ctx.players[i].active && ctx.players[i].clientId == clientId)
         {
@@ -783,15 +758,7 @@ static void sendFullStateSync(GameContext& ctx)
     json_object_set_new(gameUpdate.get(), "totalPausedTime", json_integer(ctx.match.totalPausedTime));
     json_object_set_new(gameUpdate.get(), "pauseStartTime", json_integer(ctx.match.pauseStartTime));
     
-    JsonPtr playersArray(json_array());
-    for (int i = 0; i < 4; i++)
-    {
-        if (ctx.players[i].active && !ctx.players[i].clientId.empty()) 
-        {
-            json_array_append_new(playersArray.get(), json_string(ctx.players[i].clientId.c_str()));
-        }
-    }
-    json_object_set_new(gameUpdate.get(), "players", playersArray.release());
+    json_object_set_new(gameUpdate.get(), "players", buildPlayerClientIdList(ctx));
     
     mp_api_game(ctx.network.api, gameUpdate.get());
     ctx.network.lastStateSyncSent = SDL_GetTicks();

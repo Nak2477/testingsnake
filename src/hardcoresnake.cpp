@@ -1,5 +1,53 @@
 #include "hardcoresnake.h"
 #include "multiplayer.h"
+#include <cstring>
+
+// Direction utility functions
+const char* directionToString(Direction dir) {
+    switch (dir) {
+        case Direction::UP:    return "UP";
+        case Direction::DOWN:  return "DOWN";
+        case Direction::LEFT:  return "LEFT";
+        case Direction::RIGHT: return "RIGHT";
+        case Direction::NONE:  return "NONE";
+        default: return "NONE";
+    }
+}
+
+Direction stringToDirection(const char* str) {
+    if (strcmp(str, "UP") == 0)    return Direction::UP;
+    if (strcmp(str, "DOWN") == 0)  return Direction::DOWN;
+    if (strcmp(str, "LEFT") == 0)  return Direction::LEFT;
+    if (strcmp(str, "RIGHT") == 0) return Direction::RIGHT;
+    return Direction::NONE;
+}
+
+// Utility function for random spawn positions (shared by Game and Multiplayer)
+Position getRandomSpawnPositionUtil(const std::unordered_map<int, bool>& occupiedPositions) {
+    const int MAX_ATTEMPTS = Config::Game::MAX_FOOD_SPAWN_ATTEMPTS;
+    int attempts = 0;
+    
+    Position randomPos;
+    do {
+        // Ensure spawn position has room for 3-segment snake extending left
+        randomPos.x = (rand() % (Config::Grid::WIDTH - 2)) + 2;  // Range: 2 to WIDTH-1
+        randomPos.y = rand() % Config::Grid::HEIGHT;
+        int key = randomPos.y * Config::Grid::WIDTH + randomPos.x;
+        
+        // Check that spawn position and the 2 cells to the left are all empty
+        int leftKey1 = randomPos.y * Config::Grid::WIDTH + (randomPos.x - 1);
+        int leftKey2 = randomPos.y * Config::Grid::WIDTH + (randomPos.x - 2);
+        
+        if (occupiedPositions.count(key) == 0 && 
+            occupiedPositions.count(leftKey1) == 0 && 
+            occupiedPositions.count(leftKey2) == 0) {
+            break;
+        }
+        attempts++;
+    } while (attempts < MAX_ATTEMPTS);
+    
+    return randomPos;
+}
 
 Snake::Snake(SDL_Color snakeColor, Position startPos)
     :   direction(Direction::NONE),

@@ -93,9 +93,9 @@ void MenuRender::clearScreen()
     SDL_RenderClear(renderer);
 }
 
-void MenuRender::renderPlayers(const std::array<PlayerSlot, 4>& players)
+void MenuRender::renderPlayers(const std::array<PlayerSlot, Config::Game::MAX_PLAYERS>& players)
 {
-    for (int p = 0; p < 4; p++)
+    for (int p = 0; p < Config::Game::MAX_PLAYERS; p++)
     {
         if (!players[p].active || !players[p].snake) continue;
         
@@ -349,7 +349,7 @@ void MenuRender::renderLobby(const std::array<PlayerSlot, 4>& players, bool isHo
     int startY = 180;
     int spacing = 60;
     
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < Config::Game::MAX_PLAYERS; i++) {
         char text[64];
         if (players[i].active && players[i].snake) {
             snprintf(text, sizeof(text), "Player %d: Ready", i + 1);
@@ -420,7 +420,7 @@ void MenuRender::renderMatchEnd(int winnerIndex, const std::array<PlayerSlot, 4>
     
     char text[128];
 
-    if (winnerIndex >= 0 && winnerIndex < 4 && players.at(winnerIndex).snake)
+    if (winnerIndex >= 0 && winnerIndex < Config::Game::MAX_PLAYERS && players.at(winnerIndex).snake)
     {
         snprintf(text, sizeof(text), "MATCH ENDED - Player %d WINS!", winnerIndex + 1);
         renderText(text, Config::Window::WIDTH/2 - 150, Config::Window::HEIGHT/2 - 60, {0, 255, 0, 255});
