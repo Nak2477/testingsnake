@@ -275,7 +275,7 @@ public:
     void sendGameMessage(json_t* message);
     
     void sendPlayerInput(Direction direction);
-    void broadcastGameState();
+    void broadcastGameState(bool critical = false);
     void sendPeriodicStateSync();
     
     NetworkContext& getNetworkContext() { return ctx->network; }

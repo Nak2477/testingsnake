@@ -1,30 +1,35 @@
 #include "rendermenu.h"
 #include "multiplayer.h"
 #include "config.h"
+#include "logger.h"
 #include <sstream>
 #include <iomanip>
 #include <iostream>
 #include <algorithm>
 
-bool MenuRender::sdlInitialized = false;
+std::atomic<bool> MenuRender::sdlInitialized(false);
+std::mutex MenuRender::sdlInitMutex;
 
 MenuRender::MenuRender()
     : window(nullptr), renderer(nullptr), font(nullptr), titleFont(nullptr)
 {
-    // Initialize SDL subsystems (safe to call multiple times)
-    if (!sdlInitialized) {
-        if (SDL_Init(SDL_INIT_VIDEO) < 0) {
-            std::cerr << "SDL init failed: " << SDL_GetError() << std::endl;
-            throw std::runtime_error("SDL initialization failed");
-        }
+    // Initialize SDL subsystems (thread-safe, safe to call multiple times)
+    if (!sdlInitialized.load()) {
+        std::lock_guard<std::mutex> lock(sdlInitMutex);
+        if (!sdlInitialized.load()) {
+            if (SDL_Init(SDL_INIT_VIDEO) < 0) {
+                std::cerr << "SDL init failed: " << SDL_GetError() << std::endl;
+                throw std::runtime_error("SDL initialization failed");
+            }
 
-        if (TTF_Init() == -1) {
-            std::cerr << "SDL_ttf init failed: " << TTF_GetError() << std::endl;
-            SDL_Quit();
-            throw std::runtime_error("SDL_ttf initialization failed");
+            if (TTF_Init() == -1) {
+                std::cerr << "SDL_ttf init failed: " << TTF_GetError() << std::endl;
+                SDL_Quit();
+                throw std::runtime_error("SDL_ttf initialization failed");
+            }
+            
+            sdlInitialized.store(true);
         }
-        
-        sdlInitialized = true;
     }
     
     window = SDL_CreateWindow(

@@ -8,6 +8,8 @@
 #include <map>
 #include <string>
 #include <array>
+#include <atomic>
+#include <mutex>
 #include "hardcoresnake.h"
 
 class MenuRender
@@ -47,7 +49,8 @@ class MenuRender
         TTF_Font* titleFont;
         int menuSelection;
         
-        static bool sdlInitialized;
+        static std::atomic<bool> sdlInitialized;
+        static std::mutex sdlInitMutex;
 
         // Cached textures for static text
         std::map<std::string, SDL_Texture*> textureCache;

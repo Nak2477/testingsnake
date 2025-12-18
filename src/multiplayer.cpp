@@ -1,10 +1,16 @@
 #include "multiplayer.h"
 #include "config.h"
 #include "game.h"
+#include "logger.h"
 #include <iostream>
 
 // ========== INTERNAL FORWARD DECLARATIONS ==========
 // These are implementation details not exposed in the header
+
+// Network input validation
+static bool isValidPosition(int x, int y) {
+    return x >= 0 && x < Config::Grid::WIDTH && y >= 0 && y < Config::Grid::HEIGHT;
+}
 
 static void on_multiplayer_event(const char *event, int64_t messageId, const char *clientId, json_t *data, void *user_data);
 static void processNetworkMessages(GameContext& ctx);
@@ -266,17 +272,12 @@ void NetworkManager::sendPlayerInput(Direction direction) {
     mp_api_game(ctx->network.api, inputMsg.get());
 }
 
-void NetworkManager::broadcastGameState() {
+void NetworkManager::broadcastGameState(bool critical) {
     if (!ctx->network.api || !ctx->network.isHost)
         return;
     
-    // Throttle broadcasts to 10Hz (every 100ms) for regular updates
-    // But allow critical updates (food spawn, respawn) to go through immediately
     static Uint32 lastBroadcast = 0;
     Uint32 now = SDL_GetTicks();
-    
-    // Check if this is a critical update by seeing if food or player positions changed significantly
-    // For simplicity, we'll always allow broadcasts but throttle only the regular update calls
     // The caller can force immediate broadcast by calling this directly after important events
     
     if (now - lastBroadcast < 100) {
@@ -652,8 +653,14 @@ static void handleGameState(GameContext& ctx, json_t* data)
     json_t* foodY = json_object_get(data, "foodY");
     if (foodX && foodY && ctx.food)
     {
-        Position foodPos = {(int)json_integer_value(foodX), (int)json_integer_value(foodY)};
-        ctx.food->setPosition(foodPos);
+        int x = (int)json_integer_value(foodX);
+        int y = (int)json_integer_value(foodY);
+        
+        if (isValidPosition(x, y)) {
+            ctx.food->setPosition(Position{x, y});
+        } else {
+            Logger::warn("Invalid food position from network: ", x, ",", y);
+        }
     }
     
     json_t* playersArray = json_object_get(data, "players");
@@ -681,10 +688,15 @@ static void handleGameState(GameContext& ctx, json_t* data)
                 json_t* segment;
                 json_array_foreach(bodyArray, i, segment) 
                 {
-                    Position pos;
-                    pos.x = (int)json_integer_value(json_object_get(segment, "x"));
-                    pos.y = (int)json_integer_value(json_object_get(segment, "y"));
-                    newBody.push_back(pos);
+                    int x = (int)json_integer_value(json_object_get(segment, "x"));
+                    int y = (int)json_integer_value(json_object_get(segment, "y"));
+                    
+                    if (!isValidPosition(x, y)) {
+                        Logger::warn("Invalid snake position from network: ", x, ",", y, " - skipping segment");
+                        continue;
+                    }
+                    
+                    newBody.push_back(Position{x, y});
                 }
                 
                 if (!newBody.empty())

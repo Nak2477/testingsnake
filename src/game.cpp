@@ -7,6 +7,10 @@ Game::Game()
       updateInterval(Config::Game::INITIAL_SPEED_MS), menuSelection(0), pauseMenuSelection(0),
       sessionSelection(0), inputHandler(&Game::handleMenuInput)
 {
+    // Initialize logger
+    Logger::init("hardcoresnake.log", LogLevel::INFO, true);
+    Logger::info("Game starting...");
+    
     // Initialize game context
     ctx.players.setMyPlayerIndex(-1);
     ctx.food = &food;
@@ -39,13 +43,16 @@ Game::Game()
 
 Game::~Game()
 {
+    if (ctx.players.hasMe() && ctx.players.me().snake)
+    {
+        Logger::info("Final score: ", ctx.players.me().snake->getScore());
+    }
+    
     networkManager.reset();
     // ui automatically cleaned up by unique_ptr
     
-    if (ctx.players.hasMe() && ctx.players.me().snake)
-    {
-        std::cout << "Final score: " << ctx.players.me().snake->getScore() << std::endl;
-    }
+    Logger::info("Game shutting down...");
+    Logger::shutdown();
 }
 
 void Game::run()
