@@ -1,7 +1,6 @@
 #include "hardcoresnake.h"
 #include "multiplayer.h"
 
-// Snake implementation
 Snake::Snake(SDL_Color snakeColor, Position startPos)
     :   direction(Direction::NONE),
     nextDirection(Direction::NONE),
@@ -9,7 +8,6 @@ Snake::Snake(SDL_Color snakeColor, Position startPos)
         alive(true),
         score(0) {
     
-    // Initialize snake with 3 segments
     body.push_back(startPos);
     body.push_back({startPos.x - 1, startPos.y});
     body.push_back({startPos.x - 2, startPos.y});
@@ -17,23 +15,22 @@ Snake::Snake(SDL_Color snakeColor, Position startPos)
 
 void Snake::setDirection(Direction dir)
 {
-    // If not moving yet, flip body to match first direction if needed
-    if (direction == Direction::NONE && body.size() >= 2) {
+    if (direction == Direction::NONE && body.size() >= 2)
+    {
         Position head = body[0];
         Position neck = body[1];
         
-        // Check current body orientation
         bool facingRight = (head.x > neck.x);
         bool facingLeft = (head.x < neck.x);
         bool facingDown = (head.y > neck.y);
         bool facingUp = (head.y < neck.y);
         
-        // If player wants opposite direction, flip the body
-        if ((dir == Direction::LEFT && facingRight) || 
-            (dir == Direction::RIGHT && facingLeft)) {
+        if ((dir == Direction::LEFT && facingRight) || (dir == Direction::RIGHT && facingLeft))
+            {
             std::reverse(body.begin(), body.end());
-        } else if ((dir == Direction::UP && facingDown) || 
-                   (dir == Direction::DOWN && facingUp)) {
+        } 
+        else if ((dir == Direction::UP && facingDown) || (dir == Direction::DOWN && facingUp))
+        {
             std::reverse(body.begin(), body.end());
         }
         
@@ -41,7 +38,6 @@ void Snake::setDirection(Direction dir)
         return;
     }
     
-    // Prevent reversing direction when already moving
     if ((dir == Direction::UP && direction != Direction::DOWN) ||
         (dir == Direction::DOWN && direction != Direction::UP) ||
         (dir == Direction::LEFT && direction != Direction::RIGHT) ||
@@ -97,70 +93,37 @@ void Snake::reset(const Position& startPos)
 
 void Snake::setBody(const std::deque<Position>& newBody)
 {
-    if (!newBody.empty()) {
+    if (!newBody.empty())
+    {
         body = newBody;
     }
 }
 
-bool Snake::checkCollision(const Position& pos) const
+Food::Food()
 {
-    for (const auto& segment : body) 
-    {
-        if (segment == pos) {
-            return true;
-        }
-    }
-    return false;
-}
-
-bool Snake::checkSelfCollision() const
-{
-    const Position& head = body.front();
-    
-    for (size_t i = 1; i < body.size(); i++)
-    {
-        if (body[i] == head) {
-            return true;
-        }
-    }
-    return false;
-}
-
-bool Snake::checkBoundaryCollision() const
-{
-    const Position& head = body.front();
-    return head.x < 0 || head.x >= GRID_WIDTH || 
-           head.y < 0 || head.y >= GRID_HEIGHT;
-}
-
-// Food implementation
-Food::Food() : color{255, 0, 0, 255}
-{
-    // Note: srand() is called in main(), not here
 }
 
 void Food::spawn(const std::unordered_map<int, bool>& occupiedPositions)
 {
     bool validPosition = false;
     int attempts = 0;
-    const int MAX_ATTEMPTS = 1000;  // Prevent infinite loop
+    const int MAX_ATTEMPTS = Config::Game::MAX_FOOD_SPAWN_ATTEMPTS;
     
     while (!validPosition && attempts < MAX_ATTEMPTS)
     {
-        pos.x = std::rand() % GRID_WIDTH;
-        pos.y = std::rand() % GRID_HEIGHT;
+        pos.x = std::rand() % Config::Grid::WIDTH;
+        pos.y = std::rand() % Config::Grid::HEIGHT;
         
-        int key = pos.y * GRID_WIDTH + pos.x;
+        int key = pos.y * Config::Grid::WIDTH + pos.x;
         validPosition = (occupiedPositions.count(key) == 0);  // O(1) lookup!
         attempts++;
     }
     
-    // Fallback: If we couldn't find a spot (grid is nearly full), 
-    // just place it at a random location anyway
-    if (!validPosition) {
+    if (!validPosition)
+    {
         std::cerr << "WARNING: Could not find empty spot for food after " 
                   << MAX_ATTEMPTS << " attempts. Grid may be full." << std::endl;
-        pos.x = std::rand() % GRID_WIDTH;
-        pos.y = std::rand() % GRID_HEIGHT;
+        pos.x = std::rand() % Config::Grid::WIDTH;
+        pos.y = std::rand() % Config::Grid::HEIGHT;
     }
 }

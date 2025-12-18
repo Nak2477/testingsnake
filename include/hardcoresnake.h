@@ -1,6 +1,7 @@
 #ifndef HARDCORESNAKE_H
 #define HARDCORESNAKE_H
 
+#include "config.h"
 #include <SDL2/SDL_ttf.h>
 #include <cstdlib>
 #include <ctime>
@@ -10,23 +11,6 @@
 #include <memory>
 #include <unordered_map>
 
-// Game constants
-const int WINDOW_WIDTH = 800;
-const int WINDOW_HEIGHT = 600;
-const int GRID_SIZE = 20;
-const int GRID_WIDTH = WINDOW_WIDTH / GRID_SIZE;
-const int GRID_HEIGHT = WINDOW_HEIGHT / GRID_SIZE;
-const int INITIAL_SPEED = 150; // milliseconds per update
-const int MATCH_DURATION_SECONDS = 120; // 2 minutes per match (requirement 5.1)
-const int MAX_FOOD_SPAWN_ATTEMPTS = 1000; // Max attempts to find empty cell
-
-// Network timing constants
-const Uint32 STATE_SYNC_INTERVAL_MS = 5000;  // Host broadcasts full state every 5s
-const Uint32 DIRECTION_CHANGE_THROTTLE_MS = 16;  // Max 60 direction changes/sec  
-const Uint32 CONNECTION_TIMEOUT_WARNING_MS = 15000;  // Warn after 15s
-const Uint32 CONNECTION_TIMEOUT_DISCONNECT_MS = 30000;  // Disconnect after 30s
-
-// Direction enum
 enum class Direction {
     UP,
     DOWN,
@@ -35,7 +19,6 @@ enum class Direction {
     NONE
 };
 
-// Position structure
 struct Position {
     int x;
     int y;
@@ -45,10 +28,7 @@ struct Position {
     }
 };
 
-// Forward declaration
-//struct GameContext;
 
-// Snake class
 class Snake {
 private:
     std::deque<Position> body;
@@ -57,19 +37,15 @@ private:
     SDL_Color color;
     bool alive;
     int score;
-    
+
 public:
     Snake(SDL_Color snakeColor, Position startPos);
-    
+
     void setDirection(Direction dir);
     void update();
     void grow();
     void reset(const Position& startPos);
 
-    bool checkCollision(const Position& pos) const;
-    bool checkSelfCollision() const;
-    bool checkBoundaryCollision() const;
-    
     void setBody(const std::deque<Position>& newBody);
     const std::deque<Position>& getBody() const { return body; }
 
@@ -82,20 +58,18 @@ public:
     void setScore(int newScore) { score = newScore; }
 };
 
-// PlayerSlot structure - represents a game slot that can hold a player/snake
 struct PlayerSlot {
     std::unique_ptr<Snake> snake;
     std::string clientId;
     bool active;
-    bool paused;  // Whether this player is paused
-    Uint32 lastMpSent;  // Track last multiplayer send time for throttling
+    bool paused;
+    Uint32 lastMpSent;
 };
 
-// Food class
 class Food {
 private:
     Position pos;
-    SDL_Color color;
+    SDL_Color color = Config::Render::FOOD_COLOR;
     
 public:
     Food();

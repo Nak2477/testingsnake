@@ -15,9 +15,16 @@ class MenuRender
     public:
         MenuRender();
         ~MenuRender();
+        
+        // Game rendering methods (merged from GameRender)
+        void renderGame(const struct GameContext& ctx, bool matchEnded);
+        void renderPlayers(const std::array<PlayerSlot, 4>& players);
+        void renderFood(const Food& food);
+        void renderHUD(int score, int remainingSeconds, const std::string& sessionId);
+        void clearScreen();
+        void present();
 
-        void renderText(const char* text, int x, int y, SDL_Color color, TTF_Font* textFont = nullptr);
-        void renderCachedText(const char* text, int x, int y, SDL_Color color, TTF_Font* textFont = nullptr);
+        void renderText(const char* text, int x, int y, SDL_Color color, TTF_Font* textFont = nullptr, bool cache = false);
 
         // Menu screens for different game states
         void renderMenu(int menuSelection);           // Main menu (MENU state)
@@ -26,6 +33,7 @@ class MenuRender
         void renderCountdown(int seconds);            // COUNTDOWN state
         void renderPauseMenu(int selection);         // Pause overlay during PLAYING
         void renderMatchEnd(int winnerIndex, const std::array<PlayerSlot, 4>& players);  // MATCH_END state
+        
         
         SDL_Renderer* getRenderer() { return renderer; }
         SDL_Window* getWindow() { return window; }
@@ -47,7 +55,6 @@ class MenuRender
         // Helper to create and cache texture
         SDL_Texture* createTextTexture(const char* text, SDL_Color color, TTF_Font* textFont);
         SDL_Texture* getCachedTexture(const char* text, SDL_Color color, TTF_Font* textFont);
-
 
 };
 

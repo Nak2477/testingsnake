@@ -2,7 +2,6 @@
 
 #include "hardcoresnake.h"
 #include "rendermenu.h"
-#include "rendergame.h"
 #include "multiplayer.h"
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_ttf.h>
@@ -26,14 +25,16 @@ class Game {
         ~Game();
         void run();
 
+
     private:
 
         void handleInput();
         void update();
         void render();
         void changeState(GameState newState);
-        void exitState(GameState oldState);
-        void enterState(GameState newState);   
+        void changeState(GameState newState, bool fromNetwork);
+        void exitState(GameState oldState, bool fromNetwork);
+        void enterState(GameState newState, bool fromNetwork);   
         
         void handleMenuInput(SDL_Keycode key);
         void handleMultiplayerInput(SDL_Keycode key);
@@ -43,11 +44,9 @@ class Game {
         void handleMatchEndInput(SDL_Keycode key);
         
         void checkMatchTimer(Uint32 currentTime);
-
         void updatePlayers();
         void respawnPlayer(int playerIndex);
         void resetMatch();
-        bool canUnpause() const;
         // Helpers
         bool isPlayerValid(int index) const { return ctx.players.isValid(index); }
         void buildCollisionMap();
@@ -55,9 +54,7 @@ class Game {
 
 private:
 
-
     MenuRender* ui;
-    GameRender* gameRenderer;
 
     // Game state
     GameContext ctx;

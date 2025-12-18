@@ -66,7 +66,6 @@ target_link_libraries(multiplayer_api
 set(SNAKE_CPP_SOURCES
     src/hardcoresnake.cpp
     src/rendermenu.cpp
-    src/rendergame.cpp
     src/multiplayer.cpp
     src/game.cpp
 )

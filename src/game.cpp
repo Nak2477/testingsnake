@@ -3,9 +3,9 @@
 #include <ctime>
 
 Game::Game() 
-    : ui(nullptr), gameRenderer(nullptr),
+    : ui(nullptr),
       state(GameState::MENU), quit(false),
-      updateInterval(INITIAL_SPEED), menuSelection(0), pauseMenuSelection(0),
+      updateInterval(Config::Game::INITIAL_SPEED_MS), menuSelection(0), pauseMenuSelection(0),
       sessionSelection(0), inputHandler(&Game::handleMenuInput)
 {
     // Initialize game context
@@ -21,8 +21,9 @@ Game::Game()
     ctx.onStateChange = [this](int newStateInt) {
         GameState newState = static_cast<GameState>(newStateInt);
         // Use changeState to properly handle enter/exit transitions
+        // Pass fromNetwork=true to prevent sending pause messages back
         if (this->state != newState) {
-            this->changeState(newState);
+            this->changeState(newState, true);
         }
     };
     
@@ -31,7 +32,6 @@ Game::Game()
     
     // Initialize SDL and rendering (throws on failure)
     ui = new MenuRender();
-    gameRenderer = new GameRender(ui->getRenderer(), ui);
     
     // Initialize all player slots as inactive
     for (int i = 0; i < 4; i++) {
@@ -42,7 +42,7 @@ Game::Game()
     }
     
     // Reserve capacity for collision detection map
-    occupiedPositions.reserve(400);  // 4 players * ~100 segments max
+    occupiedPositions.reserve(Config::Performance::COLLISION_MAP_RESERVE_SIZE);
     
     // Spawn initial food
     food.spawn(occupiedPositions);
@@ -56,9 +56,8 @@ Game::~Game()
     // Network manager cleanup (unique_ptr handles destruction)
     networkManager.reset();
     
-    // Cleanup renderers (MenuRender destructor handles SDL cleanup)
+    // Cleanup renderer (MenuRender destructor handles SDL cleanup)
     delete ui;
-    delete gameRenderer;
     
     // Print final score
     if (ctx.players.hasMe() && ctx.players.me().snake) {
@@ -72,7 +71,6 @@ void Game::run()
         handleInput();
         update();
         render();
-        //SDL_Delay(16);  // ~60 FPS
     }
 }
 
@@ -103,7 +101,6 @@ void Game::update()
     if (networkManager && networkManager->isConnected()) {
         networkManager->processMessages();
         
-        // CRITICAL FIX: Periodic state sync from host
         if (networkManager->isHost()) {
             networkManager->sendPeriodicStateSync();  // Every 5 seconds
         }
@@ -138,18 +135,18 @@ void Game::render()
     switch (state)
     {
         case GameState::MENU:
-            gameRenderer->clearScreen();
+            ui->clearScreen();
             ui->renderMenu(menuSelection);
             break;
             
         case GameState::SINGLEPLAYER:
             // Transition state - render menu
-            gameRenderer->clearScreen();
+            ui->clearScreen();
             ui->renderMenu(menuSelection);
             break;
             
         case GameState::MULTIPLAYER:
-            gameRenderer->clearScreen();
+            ui->clearScreen();
             ui->renderSessionBrowser(
                 networkManager->getAvailableSessions(), 
                 sessionSelection,
@@ -158,54 +155,64 @@ void Game::render()
             break;
             
         case GameState::LOBBY:
-            gameRenderer->clearScreen();
+            ui->clearScreen();
             ui->renderLobby(ctx.players.getSlots(), networkManager->isHost());
             break;
             
         case GameState::COUNTDOWN:
-            gameRenderer->renderGame(ctx, false);
+            ui->renderGame(ctx, false);
             // ui->renderCountdown(countdownSeconds); // TODO: Need to track countdown timer
             break;
             
         case GameState::PLAYING:
-            gameRenderer->renderGame(ctx, false);
+            ui->renderGame(ctx, false);
             break;
             
         case GameState::PAUSED:
-            gameRenderer->renderGame(ctx, false);
+            ui->renderGame(ctx, false);
             ui->renderPauseMenu(pauseMenuSelection);
             break;
             
         case GameState::MATCH_END:
-            gameRenderer->renderGame(ctx, true);
+            ui->renderGame(ctx, true);
             ui->renderMatchEnd(ctx.match.winnerIndex, ctx.players.getSlots());
             break;
     }
 
-    gameRenderer->present();
+    ui->present();
 }
 
 void Game::changeState(GameState newState)
 {
-    exitState(state);
-    enterState(newState);
+    changeState(newState, false);
+}
+
+void Game::changeState(GameState newState, bool fromNetwork)
+{
+    GameState oldState = state;
+    exitState(oldState, fromNetwork);
+    enterState(newState, fromNetwork);
     state = newState;
 }
 
-void Game::exitState(GameState oldState)
+void Game::exitState(GameState oldState, bool fromNetwork)
 {
-    switch (oldState) {
+    switch (oldState)
+    {
         case GameState::PAUSED:
-            // Finalize pause timing
-            if (ctx.match.pauseStartTime > 0) {
+
+            if (ctx.match.pauseStartTime > 0)
+            {
                 ctx.match.totalPausedTime += (SDL_GetTicks() - ctx.match.pauseStartTime);
                 ctx.match.pauseStartTime = 0;
             }
-            if (ctx.players.hasMe()) {
+            if (ctx.players.hasMe())
+            {
                 ctx.players.me().paused = false;
             }
-            // Broadcast unpause if multiplayer
-            if (networkManager->isConnected() && ctx.players.hasMe()) {
+
+            // Only send unpause message if WE initiated the unpause (not from network sync)
+            if (!fromNetwork && networkManager->isConnected() && ctx.players.hasMe()) {
                 ctx.match.pausedByClientId = "";
                 networkManager->sendPauseState(false, ctx.players.me().clientId);
             }
@@ -216,7 +223,7 @@ void Game::exitState(GameState oldState)
     }
 }
 
-void Game::enterState(GameState newState)
+void Game::enterState(GameState newState, bool fromNetwork)
 {
     switch (newState) {
         case GameState::MENU:
@@ -239,7 +246,8 @@ void Game::enterState(GameState newState)
             if (ctx.players.hasMe()) {
                 ctx.players.me().paused = true;
             }
-            if (networkManager->isConnected() && ctx.players.hasMe()) {
+            // Only send pause message if WE initiated the pause (not from network sync)
+            if (!fromNetwork && networkManager->isConnected() && ctx.players.hasMe()) {
                 ctx.match.pausedByClientId = ctx.players.me().clientId;
                 networkManager->sendPauseState(true, ctx.match.pausedByClientId);
             }
@@ -264,14 +272,15 @@ void Game::enterState(GameState newState)
                     
                     // Broadcast game start with food position
                     if (networkManager->isConnected()) {
-                        JsonPtr startUpdate(json_object());
-                        json_object_set_new(startUpdate.get(), "type", json_string("state_sync"));
-                        json_object_set_new(startUpdate.get(), "gameState", json_string("PLAYING"));
-                        json_object_set_new(startUpdate.get(), "matchStartTime", json_integer(ctx.match.matchStartTime));
-                        json_object_set_new(startUpdate.get(), "elapsedMs", json_integer(0));
-                        json_object_set_new(startUpdate.get(), "totalPausedTime", json_integer(0));
-                        json_object_set_new(startUpdate.get(), "foodX", json_integer(food.getPosition().x));
-                        json_object_set_new(startUpdate.get(), "foodY", json_integer(food.getPosition().y));
+                        auto startUpdate = JsonBuilder()
+                            .set("type", "state_sync")
+                            .set("gameState", "PLAYING")
+                            .set("matchStartTime", ctx.match.matchStartTime)
+                            .set("elapsedMs", 0)
+                            .set("totalPausedTime", 0)
+                            .set("foodX", food.getPosition().x)
+                            .set("foodY", food.getPosition().y)
+                            .buildPtr();
                         networkManager->sendGameMessage(startUpdate.get());
                     }
                 } else {
@@ -308,8 +317,8 @@ void Game::handleMenuInput(SDL_Keycode key)
         case SDLK_SPACE:
             if (menuSelection == 0)
             {  // Single Player
-                Position startPos = {GRID_WIDTH / 2, GRID_HEIGHT / 2};
-                ctx.players[0].snake = std::make_unique<Snake>(SDL_Color{0, 255, 0, 255}, startPos);
+                Position startPos = {Config::Grid::WIDTH / 2, Config::Grid::HEIGHT / 2};
+                ctx.players[0].snake = std::make_unique<Snake>(Config::Render::PLAYER_COLORS[0], startPos);
                 ctx.players[0].active = true;
                 ctx.players[0].clientId = "local_player";
                 ctx.players.setMyPlayerIndex(0);
@@ -327,7 +336,7 @@ void Game::handleMenuInput(SDL_Keycode key)
             }
             else if (menuSelection == 1)
             {  // Multiplayer
-                if (networkManager->initialize("kontoret.onvo.se", 9001))
+                if (networkManager->initialize(Config::Network::DEFAULT_HOST, Config::Network::DEFAULT_PORT))
                 {
                     state = GameState::MULTIPLAYER;
                     inputHandler = &Game::handleMultiplayerInput;
@@ -420,51 +429,42 @@ void Game::handlePlayingInput(SDL_Keycode key)
     
     if (!mySnake)
         return;
-    
+
+    Direction dir = Direction::NONE;
     switch (key)
     {
         case SDLK_UP:
-            mySnake->setDirection(Direction::UP);
-            // Throttle direction changes to 60 Hz max (prevents network spam)
-            if (networkManager->isConnected()) {
-                Uint32 currentTime = SDL_GetTicks();
-                if (currentTime - ctx.players.me().lastMpSent >= DIRECTION_CHANGE_THROTTLE_MS) {
-                    networkManager->sendPlayerUpdate(ctx.players.myPlayerIndex());
-                }
-            }
+        case SDLK_w:
+            dir = Direction::UP;
             break;
         case SDLK_DOWN:
-            mySnake->setDirection(Direction::DOWN);
-            if (networkManager->isConnected()) {
-                Uint32 currentTime = SDL_GetTicks();
-                if (currentTime - ctx.players.me().lastMpSent >= DIRECTION_CHANGE_THROTTLE_MS) {
-                    networkManager->sendPlayerUpdate(ctx.players.myPlayerIndex());
-                }
-            }
+        case SDLK_s:
+            dir = Direction::DOWN;
             break;
         case SDLK_LEFT:
-            mySnake->setDirection(Direction::LEFT);
-            if (networkManager->isConnected()) {
-                Uint32 currentTime = SDL_GetTicks();
-                if (currentTime - ctx.players.me().lastMpSent >= DIRECTION_CHANGE_THROTTLE_MS) {
-                    networkManager->sendPlayerUpdate(ctx.players.myPlayerIndex());
-                }
-            }
+        case SDLK_a:
+            dir = Direction::LEFT;
             break;
         case SDLK_RIGHT:
-            mySnake->setDirection(Direction::RIGHT);
-            if (networkManager->isConnected()) {
-                Uint32 currentTime = SDL_GetTicks();
-                if (currentTime - ctx.players.me().lastMpSent >= DIRECTION_CHANGE_THROTTLE_MS) {
-                    networkManager->sendPlayerUpdate(ctx.players.myPlayerIndex());
-                }
-            }
+        case SDLK_d:
+            dir = Direction::RIGHT;
             break;
         case SDLK_p:
         case SDLK_ESCAPE:
             changeState(GameState::PAUSED);
-            break;
+            return;
+        default:
+            return;
     }
+
+    // Apply direction locally (immediate response for host, prediction for clients)
+    mySnake->setDirection(dir);
+    
+    // If multiplayer client, send input to host
+    if (networkManager->isConnected() && !networkManager->isHost()) {
+        networkManager->sendPlayerInput(dir);
+    }
+    // Host processes inputs immediately via setDirection above
 }
 
 void Game::handlePausedInput(SDL_Keycode key)
@@ -479,7 +479,6 @@ void Game::handlePausedInput(SDL_Keycode key)
             break;
         case SDLK_RETURN:
         case SDLK_SPACE:
-            if (!canUnpause()) break;
             // Execute selected option
             switch (pauseMenuSelection)
             {
@@ -498,7 +497,6 @@ void Game::handlePausedInput(SDL_Keycode key)
             break;
         case SDLK_ESCAPE:
         case SDLK_p:
-            if (!canUnpause()) break;
             changeState(GameState::PLAYING);
             break;
     }
@@ -538,22 +536,24 @@ void Game::checkMatchTimer(Uint32 currentTime)
         if (networkManager->isHost() && networkManager->isConnected()) {
             static Uint32 lastTimerBroadcast = 0;
             if (currentTime - lastTimerBroadcast >= 1000) {
-                JsonPtr timerUpdate(json_object());
-                json_object_set_new(timerUpdate.get(), "type", json_string("time_sync"));
-                json_object_set_new(timerUpdate.get(), "elapsedMs", json_integer(elapsedMs));
-                json_object_set_new(timerUpdate.get(), "totalPausedTime", json_integer(ctx.match.totalPausedTime));
+                auto timerUpdate = JsonBuilder()
+                    .set("type", "time_sync")
+                    .set("elapsedMs", elapsedMs)
+                    .set("totalPausedTime", ctx.match.totalPausedTime)
+                    .buildPtr();
                 networkManager->sendGameMessage(timerUpdate.get());
                 lastTimerBroadcast = currentTime;
             }
         }
         
         // Check for match end (singleplayer or host)
-        if (elapsedSeconds >= MATCH_DURATION_SECONDS) {
+        if (elapsedSeconds >= Config::Game::MATCH_DURATION_SECONDS) {
             // Broadcast match end to clients if multiplayer host
             if (networkManager->isHost() && networkManager->isConnected()) {
-                JsonPtr endUpdate(json_object());
-                json_object_set_new(endUpdate.get(), "type", json_string("state_sync"));
-                json_object_set_new(endUpdate.get(), "gameState", json_string("MATCH_END"));
+                auto endUpdate = JsonBuilder()
+                    .set("type", "state_sync")
+                    .set("gameState", "MATCH_END")
+                    .buildPtr();
                 networkManager->sendGameMessage(endUpdate.get());
             }
             
@@ -611,97 +611,141 @@ void Game::checkMatchTimer(Uint32 currentTime)
 }
 
 void Game::updatePlayers()
-{
-    // STEP 1: Build collision map from ALL snakes
-    buildCollisionMap();
-    
-    // STEP 2: Check food collision for ALL players
-    bool foodEaten = false;
-    for (int i = 0; i < 4; i++)
+{    
+    if (networkManager->isHost() || !networkManager->isConnected())
     {
-        if (!isPlayerValid(i) || !ctx.players[i].snake->isAlive())
-            continue;
-        
-        if (ctx.players[i].snake->getHead() == food.getPosition())
+        if (state == GameState::PAUSED)
         {
-            ctx.players[i].snake->grow();
-            foodEaten = true;
+            if (networkManager->isConnected())
+            {
+                networkManager->broadcastGameState();
+            }
+            return;
+        }
+        if (occupiedPositions.empty())
+        {
+            buildCollisionMap();
+        }
+        
+        struct MoveInfo {           //NEEDED?
+            Position oldHead;
+            Position oldTail;   
+            Position newHead;
+            bool willGrow;
+            bool collision;
+            bool processed;
+        };
+        MoveInfo moves[4] = {};
+        bool needRebuild = false;
+        
+        for (int i = 0; i < 4; i++)
+        {
+            moves[i].processed = false;
+            if (!isPlayerValid(i) || !ctx.players[i].snake->isAlive())
+                continue;
+            moves[i].processed = true;
             
-            // Send immediate update if this is the local player (show growth)
-            if (i == ctx.players.myPlayerIndex()) {
-                networkManager->sendPlayerUpdate(i);
+            const auto& body = ctx.players[i].snake->getBody();
+            if (body.empty())
+            {
+                std::cerr << "ERROR: Player " << (i+1) << " has empty snake body!" << std::endl;
+                moves[i].processed = false;
+                continue;
             }
             
-            // Spawn new food (host spawns and broadcasts, singleplayer just spawns)
-            buildCollisionMap();  // Rebuild with grown snake
-            food.spawn(occupiedPositions);
+            moves[i].oldHead = ctx.players[i].snake->getHead();
+            moves[i].oldTail = body.back();
+            moves[i].willGrow = (moves[i].oldHead == food.getPosition());
             
-            // Broadcast new food position if multiplayer host
-            if (networkManager->isHost()) {
-                JsonPtr foodUpdate(json_object());
-                json_object_set_new(foodUpdate.get(), "type", json_string("state_sync"));
-                json_object_set_new(foodUpdate.get(), "foodX", json_integer(food.getPosition().x));
-                json_object_set_new(foodUpdate.get(), "foodY", json_integer(food.getPosition().y));
-                json_object_set_new(foodUpdate.get(), "matchStartTime", json_integer(ctx.match.matchStartTime));
-                networkManager->sendGameMessage(foodUpdate.get());
+            ctx.players[i].snake->update();
+            moves[i].newHead = ctx.players[i].snake->getHead();
+            
+            // Check collisions against UNCHANGED map (all tails still present)
+            moves[i].collision = false;
+            
+            // Boundary collision
+            if (moves[i].newHead.x < 0 || moves[i].newHead.x >= Config::Grid::WIDTH || 
+                moves[i].newHead.y < 0 || moves[i].newHead.y >= Config::Grid::HEIGHT) {
+                moves[i].collision = true;
+            }
+            // Snake collision - check against original map state
+            else {
+                int newHeadKey = moves[i].newHead.y * Config::Grid::WIDTH + moves[i].newHead.x;
+                
+                // Check if new head hits any occupied cell in the collision map
+                // The map contains ALL snake segments including all tails
+                if (occupiedPositions.count(newHeadKey) > 0) {
+                    // Hit something - but is it our own old head? That's OK (moving forward into where we were)
+                    int oldHeadKey = moves[i].oldHead.y * Config::Grid::WIDTH + moves[i].oldHead.x;
+                    if (newHeadKey != oldHeadKey) {
+                        moves[i].collision = true;
+                        std::cout << "Player " << (i+1) << " collision at (" 
+                                  << moves[i].newHead.x << "," << moves[i].newHead.y << ")" << std::endl;
+                    }
+                }
             }
         }
-    }
-    
-    // STEP 3: Update local player only
-    if (isPlayerValid(ctx.players.myPlayerIndex()))
-    {
-        int i = ctx.players.myPlayerIndex();
-        if (foodEaten) buildCollisionMap();  // Rebuild if food was eaten by someone
         
-        // Remove my head from collision map temporarily (don't collide with own head position)
-        Position oldHead = ctx.players[i].snake->getHead();
-        int oldHeadKey = oldHead.y * GRID_WIDTH + oldHead.x;
-        occupiedPositions.erase(oldHeadKey);
-        
-        ctx.players[i].snake->update();  // Move snake
-        Position newHead = ctx.players[i].snake->getHead();
-        int newHeadKey = newHead.y * GRID_WIDTH + newHead.x;
-        
-        // Send multiplayer update for local player
-        networkManager->sendPlayerUpdate(i);
-        
-        // Check ALL collisions with O(1) map lookup!
-        bool collision = false;
-        
-        // Boundary collision
-        if (newHead.x < 0 || newHead.x >= GRID_WIDTH || 
-            newHead.y < 0 || newHead.y >= GRID_HEIGHT) {
-            collision = true;
+        // Phase 2: Apply results and update collision map incrementally
+        for (int i = 0; i < 4; i++) {
+            if (!moves[i].processed)
+                continue;
+            
+            if (moves[i].collision) {
+                respawnPlayer(i);
+                std::cout << "Player " << (i+1) << " died and respawned!" << std::endl;
+                needRebuild = true;
+            } else {
+                // Update collision map incrementally
+                int oldHeadKey = moves[i].oldHead.y * Config::Grid::WIDTH + moves[i].oldHead.x;
+                int newHeadKey = moves[i].newHead.y * Config::Grid::WIDTH + moves[i].newHead.x;
+                
+                // Remove old head (it's now neck), add new head
+                occupiedPositions.erase(oldHeadKey);
+                occupiedPositions[newHeadKey] = true;
+                
+                // Handle tail
+                if (!moves[i].willGrow) {
+                    // Remove old tail (snake moved, tail advanced)
+                    int oldTailKey = moves[i].oldTail.y * Config::Grid::WIDTH + moves[i].oldTail.x;
+                    occupiedPositions.erase(oldTailKey);
+                }
+                else {
+                    // Snake grew - tail stays
+                    ctx.players[i].snake->grow();
+                    food.spawn(occupiedPositions);
+                    std::cout << "Player " << (i+1) << " ate food!" << std::endl;
+                    
+                    if (networkManager->isConnected()) {
+                        networkManager->broadcastGameState();
+                    }
+                }
+            }
         }
-        // Collision with any snake (including self-collision)
-        else if (occupiedPositions.count(newHeadKey) > 0) {
-            collision = true;
+        if (needRebuild) {
+            buildCollisionMap();
         }
-        
-        if (collision) {
-            respawnPlayer(i);
-            std::cout << "Player " << (i+1) << " died and respawned!" << std::endl;
+        if (networkManager->isConnected()) {
+            networkManager->broadcastGameState();
         }
+    } else {
+        // CLIENT: Do nothing - state updated by handleGameState()
+        // Snakes already moved by host, positions set via network
     }
 }
 
 void Game::respawnPlayer(int playerIndex)
 {
-    // Find collision-free position (similar to food spawning logic)
     Position randomPos;
-    const int MAX_ATTEMPTS = 1000;
+    const int MAX_ATTEMPTS = Config::Game::MAX_FOOD_SPAWN_ATTEMPTS;
     int attempts = 0;
     
-    // Rebuild collision map to check for safe spawn
     buildCollisionMap();
-    
     do {
-        randomPos.x = rand() % GRID_WIDTH;
-        randomPos.y = rand() % GRID_HEIGHT;
-        int key = randomPos.y * GRID_WIDTH + randomPos.x;
+        randomPos.x = rand() % Config::Grid::WIDTH;
+        randomPos.y = rand() % Config::Grid::HEIGHT;
+        int key = randomPos.y * Config::Grid::WIDTH + randomPos.x;
         
-        // Check if position is free
         if (occupiedPositions.count(key) == 0) {
             break;
         }
@@ -709,25 +753,17 @@ void Game::respawnPlayer(int playerIndex)
     } while (attempts < MAX_ATTEMPTS);
     
     ctx.players[playerIndex].snake->reset(randomPos);
-    
-    // Send multiplayer update for local player respawn
-    if (playerIndex == ctx.players.myPlayerIndex()) {
-        networkManager->sendPlayerUpdate(playerIndex);
-    }
 }
 
 void Game::resetMatch()
 {
-    // Reset all active players to their original spawn positions
-    // Spawn positions match the formula used in multiplayer:
-    // Player i: {GRID_WIDTH/4 + (i%2)*(GRID_WIDTH/2), GRID_HEIGHT/4 + (i/2)*(GRID_HEIGHT/2)}
     for (int i = 0; i < 4; i++)
     {
-        if (ctx.players[i].active && ctx.players[i].snake) {
-            Position spawnPos = {GRID_WIDTH/4 + (i%2)*(GRID_WIDTH/2), 
-                                GRID_HEIGHT/4 + (i/2)*(GRID_HEIGHT/2)};
+        if (ctx.players[i].active && ctx.players[i].snake)
+        {
+            Position spawnPos = {Config::Spawn::PLAYER_SPAWN_X[i], Config::Spawn::PLAYER_SPAWN_Y[i]};
             ctx.players[i].snake->reset(spawnPos);
-            ctx.players[i].snake->setScore(0); // Reset score to 0 for clean restart
+            ctx.players[i].snake->setScore(0);
         }
     }
     
@@ -736,30 +772,26 @@ void Game::resetMatch()
     ctx.match.totalPausedTime = 0;
     ctx.match.pauseStartTime = 0;
     ctx.match.syncedElapsedMs = 0;
-    buildCollisionMap();  // Rebuild collision map with reset snake positions
+
+    buildCollisionMap();
     food.spawn(occupiedPositions);
-    updateInterval = INITIAL_SPEED;
+    updateInterval = Config::Game::INITIAL_SPEED_MS;
     
-    // Use changeState to properly set input handler
     changeState(GameState::PLAYING);
     
     std::cout << "Game reset!" << std::endl;
 }
 
-bool Game::canUnpause() const
-{
-    // Allow anyone to pause/unpause in multiplayer
-    // Host's authoritative timing keeps everything in sync
-    return true;
-}
-
 void Game::buildCollisionMap()
 {
     occupiedPositions.clear();
-    for (int k = 0; k < 4; k++) {
-        if (isPlayerValid(k)) {
-            for (const auto& segment : ctx.players[k].snake->getBody()) {
-                occupiedPositions[segment.y * GRID_WIDTH + segment.x] = true;
+    for (int k = 0; k < 4; k++)
+    {
+        if (isPlayerValid(k))
+        {
+            for (const auto& segment : ctx.players[k].snake->getBody())
+            {
+                occupiedPositions[segment.y * Config::Grid::WIDTH + segment.x] = true;
             }
         }
     }
@@ -767,19 +799,15 @@ void Game::buildCollisionMap()
 
 void Game::resetGameState()
 {
-    // Cleanup multiplayer
     if (networkManager) {
         networkManager->shutdown();
     }
     
-    // Reset all players
     for (int i = 0; i < 4; i++) {
         ctx.players[i].active = false;
         ctx.players[i].snake = nullptr;
     }
-    
-    // Reset game state
-    ctx.players.setMyPlayerIndex(-1);
+        ctx.players.setMyPlayerIndex(-1);
     ctx.match.winnerIndex = -1;
     ctx.match.totalPausedTime = 0;
     ctx.match.pauseStartTime = 0;

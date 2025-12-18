@@ -62,6 +62,61 @@ public:
     }
 };
 
+// Fluent builder for JSON objects - eliminates boilerplate
+class JsonBuilder {
+private:
+    JsonPtr root;
+    
+public:
+    JsonBuilder() : root(json_object()) {}
+    
+    // Chainable setters for different types
+    JsonBuilder& set(const char* key, const char* value) {
+        json_object_set_new(root.get(), key, json_string(value));
+        return *this;
+    }
+    
+    JsonBuilder& set(const char* key, const std::string& value) {
+        json_object_set_new(root.get(), key, json_string(value.c_str()));
+        return *this;
+    }
+    
+    JsonBuilder& set(const char* key, int value) {
+        json_object_set_new(root.get(), key, json_integer(value));
+        return *this;
+    }
+    
+    JsonBuilder& set(const char* key, json_int_t value) {
+        json_object_set_new(root.get(), key, json_integer(value));
+        return *this;
+    }
+    
+    JsonBuilder& set(const char* key, Uint32 value) {
+        json_object_set_new(root.get(), key, json_integer(static_cast<json_int_t>(value)));
+        return *this;
+    }
+    
+    JsonBuilder& set(const char* key, bool value) {
+        json_object_set_new(root.get(), key, json_boolean(value));
+        return *this;
+    }
+    
+    JsonBuilder& set(const char* key, json_t* value) {
+        json_object_set_new(root.get(), key, value);  // Takes ownership
+        return *this;
+    }
+    
+    // Build and transfer ownership to JsonPtr
+    json_t* build() {
+        return root.release();
+    }
+    
+    // Build directly into JsonPtr
+    JsonPtr buildPtr() {
+        return JsonPtr(root.release());
+    }
+};
+
 // Network message types for thread-safe queue
 enum class NetworkMessageType {
     PLAYER_JOINED,
@@ -229,11 +284,12 @@ public:
     virtual void processMessages() = 0;
     
     // Game state updates
-    virtual void sendPlayerUpdate(int playerIndex) = 0;
     virtual void sendPauseState(bool paused, const std::string& clientId) = 0;
     virtual void sendGameMessage(json_t* message) = 0;  // Send arbitrary game message
     
-    // New methods for critical fixes
+    // Authoritative server methods
+    virtual void sendPlayerInput(Direction direction) = 0;  // Client sends input to host
+    virtual void broadcastGameState() = 0;  // Host broadcasts complete state to all clients
     virtual void sendPeriodicStateSync() = 0;  // Host: periodic full state broadcast
     
     // Access to internal context (for gradual migration)
@@ -267,11 +323,12 @@ public:
     
     void processMessages() override;
     
-    void sendPlayerUpdate(int playerIndex) override;
     void sendPauseState(bool paused, const std::string& clientId) override;
     void sendGameMessage(json_t* message) override;
     
-    // New methods for critical fixes
+    // Authoritative server methods
+    void sendPlayerInput(Direction direction) override;  // Client sends input to host
+    void broadcastGameState() override;  // Host broadcasts complete state to all clients
     void sendPeriodicStateSync();  // Host: periodic full state broadcast
     
     NetworkContext& getNetworkContext() override { return ctx->network; }

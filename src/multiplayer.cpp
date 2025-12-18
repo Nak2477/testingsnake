@@ -1,4 +1,5 @@
 #include "multiplayer.h"
+#include "config.h"
 #include "game.h"
 #include <iostream>
 
@@ -10,33 +11,20 @@ static void processNetworkMessages(GameContext& ctx);
 static void handlePlayerJoined(GameContext& ctx, const std::string& clientId);
 static void handlePlayerLeft(GameContext& ctx, const std::string& clientId);
 static void handleStateSync(GameContext& ctx, json_t* data);
-static void handlePlayerUpdate(GameContext& ctx, const std::string& clientId, json_t* data);
-static void send_game_state(GameContext& ctx, const Snake& snake);
-static void sendPlayerUpdate(GameContext& ctx, int playerIndex);
+static void handlePlayerInput(GameContext& ctx, const std::string& clientId, json_t* data);
+static void handleGameState(GameContext& ctx, json_t* data);
 static void sendGlobalPauseState(GameContext& ctx, bool paused, const std::string& pauserClientId);
 static void add_player(GameContext& ctx, const std::string& clientId);
 static int find_player_by_client_id(const GameContext& ctx, const std::string& clientId);
-static void update_remote_player(GameContext& ctx, const std::string& clientId, json_t* data);
 static void remove_player(GameContext& ctx, const std::string& clientId);
 static void sendFullStateSync(GameContext& ctx);
 static void handleHostDisconnect(GameContext& ctx);
 
 // ========== CONSTANTS ==========
 
-// Player spawn positions and colors (indexed by player slot 0-3)
-static const Position PLAYER_SPAWN_POSITIONS[4] = {
-    {GRID_WIDTH/4, GRID_HEIGHT/4},          // Player 1: Top-left
-    {3*GRID_WIDTH/4, GRID_HEIGHT/4},        // Player 2: Top-right
-    {GRID_WIDTH/4, 3*GRID_HEIGHT/4},        // Player 3: Bottom-left
-    {3*GRID_WIDTH/4, 3*GRID_HEIGHT/4}       // Player 4: Bottom-right
-};
-
-static const SDL_Color PLAYER_COLORS[4] = {
-    {0, 255, 0, 255},    // Green
-    {0, 0, 255, 255},    // Blue
-    {255, 255, 0, 255},  // Yellow
-    {255, 0, 255, 255}   // Magenta
-};
+// Player spawn positions and colors from Config
+// Positions: Config::Spawn::PLAYER_SPAWN_X/Y[i]
+// Colors: Config::Render::PLAYER_COLORS[i]
 
 // ========== NETWORK MANAGER IMPLEMENTATION ==========
 
@@ -237,7 +225,7 @@ void NetworkManager::processMessages() {
         Uint32 currentTime = SDL_GetTicks();
         Uint32 timeSinceLastMessage = currentTime - ctx->network.lastMessageReceived;
         
-        if (timeSinceLastMessage > CONNECTION_TIMEOUT_DISCONNECT_MS) {
+        if (timeSinceLastMessage > Config::Network::CONNECTION_TIMEOUT_DISCONNECT_MS) {
             std::cerr << "Connection timeout! No messages for " << (timeSinceLastMessage / 1000) << " seconds" << std::endl;
             std::cerr << "Disconnecting and returning to menu..." << std::endl;
             
@@ -246,22 +234,114 @@ void NetworkManager::processMessages() {
                 ctx->onStateChange(static_cast<int>(GameState::MENU));
             }
             shutdown();
-        } else if (timeSinceLastMessage > CONNECTION_TIMEOUT_WARNING_MS && ctx->network.connectionWarningTime == 0) {
+        } else if (timeSinceLastMessage > Config::Network::CONNECTION_TIMEOUT_WARNING_MS && ctx->network.connectionWarningTime == 0) {
             ctx->network.connectionWarningTime = currentTime;
             std::cout << "Warning: No messages received for " << (timeSinceLastMessage / 1000) << " seconds" << std::endl;
-        } else if (timeSinceLastMessage < CONNECTION_TIMEOUT_WARNING_MS) {
+        } else if (timeSinceLastMessage < Config::Network::CONNECTION_TIMEOUT_WARNING_MS) {
             // Reset warning if connection recovered
             ctx->network.connectionWarningTime = 0;
         }
     }
 }
 
-void NetworkManager::sendPlayerUpdate(int playerIndex) {
-    ::sendPlayerUpdate(*ctx, playerIndex);
-}
-
 void NetworkManager::sendPauseState(bool paused, const std::string& clientId) {
     sendGlobalPauseState(*ctx, paused, clientId);
+}
+
+void NetworkManager::sendPlayerInput(Direction direction) {
+    if (!ctx->network.api || ctx->network.sessionId.empty())
+        return;
+    
+    // Convert direction enum to string
+    const char* dirStr = "NONE";
+    switch (direction) {
+        case Direction::UP:    dirStr = "UP"; break;
+        case Direction::DOWN:  dirStr = "DOWN"; break;
+        case Direction::LEFT:  dirStr = "LEFT"; break;
+        case Direction::RIGHT: dirStr = "RIGHT"; break;
+        default: break;
+    }
+    
+    auto inputMsg = JsonBuilder()
+        .set("type", "player_input")
+        .set("direction", dirStr)
+        .buildPtr();
+    
+    mp_api_game(ctx->network.api, inputMsg.get());
+}
+
+void NetworkManager::broadcastGameState() {
+    if (!ctx->network.api || !ctx->network.isHost)
+        return;
+    
+    // Throttle broadcasts to 10Hz (every 100ms) for regular updates
+    // But allow critical updates (food spawn, respawn) to go through immediately
+    static Uint32 lastBroadcast = 0;
+    Uint32 now = SDL_GetTicks();
+    
+    // Check if this is a critical update by seeing if food or player positions changed significantly
+    // For simplicity, we'll always allow broadcasts but throttle only the regular update calls
+    // The caller can force immediate broadcast by calling this directly after important events
+    
+    if (now - lastBroadcast < 100) {
+        // Don't skip if last broadcast was very recent (< 10ms) - likely a critical update
+        if (now - lastBroadcast > 10) {
+            return;  // Too soon for regular update, skip
+        }
+    }
+    lastBroadcast = now;
+    
+    // Build complete state message
+    JsonBuilder stateMsg;
+    stateMsg.set("type", "game_state");
+    
+    // Food position
+    if (ctx->food) {
+        stateMsg.set("foodX", ctx->food->getPosition().x);
+        stateMsg.set("foodY", ctx->food->getPosition().y);
+    }
+    
+    // All player positions
+    JsonPtr playersArray(json_array());
+    for (int i = 0; i < 4; i++) {
+        if (!ctx->players[i].active || !ctx->players[i].snake)
+            continue;
+        
+        // Get const reference to body first and check if empty
+        const auto& body = ctx->players[i].snake->getBody();
+        if (body.empty()) {
+            std::cerr << "WARNING: Skipping player " << (i+1) << " with empty body in broadcastGameState" << std::endl;
+            continue;
+        }
+        
+        JsonPtr playerObj(json_object());
+        json_object_set_new(playerObj.get(), "index", json_integer(i));
+        json_object_set_new(playerObj.get(), "alive", json_boolean(ctx->players[i].snake->isAlive()));
+        
+        // Snake body
+        JsonPtr bodyArray(json_array());
+        for (const auto& segment : body) {
+            JsonPtr segmentObj(json_object());
+            json_object_set_new(segmentObj.get(), "x", json_integer(segment.x));
+            json_object_set_new(segmentObj.get(), "y", json_integer(segment.y));
+            json_array_append_new(bodyArray.get(), segmentObj.release());
+        }
+        json_object_set_new(playerObj.get(), "body", bodyArray.release());
+        
+        json_array_append_new(playersArray.get(), playerObj.release());
+    }
+    
+    stateMsg.set("players", playersArray.release());
+    
+    // Sync timer information
+    stateMsg.set("matchStartTime", ctx->match.matchStartTime);
+    stateMsg.set("elapsedMs", ctx->match.syncedElapsedMs);
+    
+    // Send to all clients
+    int result = mp_api_game(ctx->network.api, stateMsg.buildPtr().get());
+    if (result != 0) {
+        std::cerr << "ERROR: Failed to broadcast game state, result=" << result << std::endl;
+    }
 }
 
 // ========== INTERNAL IMPLEMENTATION ==========
@@ -351,8 +431,10 @@ static void processNetworkMessages(GameContext& ctx)
                 
                 if (strcmp(messageType, "state_sync") == 0) {
                     handleStateSync(ctx, data);
-                } else if (msg.clientId != ctx.network.myClientId) {
-                    handlePlayerUpdate(ctx, msg.clientId, data);
+                } else if (strcmp(messageType, "player_input") == 0) {
+                    handlePlayerInput(ctx, msg.clientId, data);
+                } else if (strcmp(messageType, "game_state") == 0) {
+                    handleGameState(ctx, data);
                 }
                 break;
             }
@@ -484,6 +566,7 @@ static void handleStateSync(GameContext& ctx, json_t* data)
         }
         
         // Update game state using callback
+        // The callback will handle the state change with fromNetwork=true
         if (ctx.onStateChange) {
             if (isPaused) {
                 ctx.onStateChange(static_cast<int>(GameState::PAUSED));
@@ -525,82 +608,6 @@ static void handleStateSync(GameContext& ctx, json_t* data)
     }
 }
 
-static void handlePlayerUpdate(GameContext& ctx, const std::string& clientId, json_t* data)
-{
-    std::cout << "Updating remote player: " << clientId << std::endl;
-    update_remote_player(ctx, clientId, data);
-}
-
-static void send_game_state(GameContext& ctx, const Snake& snake)
-{
-    if (!ctx.network.api) {
-        static bool warned = false;
-        if (!warned) {
-            std::cout << "API not initialized" << std::endl;
-            warned = true;
-        }
-        return;
-    }
-    
-    if (ctx.network.sessionId.empty()) {
-        static bool warned = false;
-        if (!warned) {
-            std::cout << "Not in a session. Press H to host or L to list sessions" << std::endl;
-            warned = true;
-        }
-        return;
-    }
-
-    Position head = snake.getHead();
-    JsonPtr gameData(json_object());
-    json_object_set_new(gameData.get(), "x", json_integer(head.x));
-    json_object_set_new(gameData.get(), "y", json_integer(head.y));
-    json_object_set_new(gameData.get(), "score", json_integer(snake.getScore()));
-    json_object_set_new(gameData.get(), "alive", json_boolean(snake.isAlive()));
-    
-    // Send paused status
-    int playerIdx = -1;
-    for (int i = 0; i < 4; i++) {
-        if (ctx.players[i].active && ctx.players[i].snake.get() == &snake) {
-            playerIdx = i;
-            break;
-        }
-    }
-    if (playerIdx >= 0) {
-        json_object_set_new(gameData.get(), "paused", json_boolean(ctx.players[playerIdx].paused));
-    }
-    
-    // Send full body for better sync
-    JsonPtr bodyArray(json_array());
-    for (const auto& segment : snake.getBody()) {
-        JsonPtr seg(json_object());
-        json_object_set_new(seg.get(), "x", json_integer(segment.x));
-        json_object_set_new(seg.get(), "y", json_integer(segment.y));
-        json_array_append_new(bodyArray.get(), seg.release());
-    }
-    json_object_set_new(gameData.get(), "body", bodyArray.release());
-    
-    int rc = mp_api_game(ctx.network.api, gameData.get());
-    if (rc != MP_API_OK) {
-        std::cerr << "Failed to send game state: " << rc << std::endl;
-    }
-}
-
-static void sendPlayerUpdate(GameContext& ctx, int playerIndex)
-{
-    // Validate player index and state
-    if (playerIndex < 0 || playerIndex >= 4)
-        return;
-    if (!ctx.players[playerIndex].active || !ctx.players[playerIndex].snake)
-        return;
-    if (ctx.network.sessionId.empty() || !ctx.network.api)
-        return;
-    
-    // Send the update (no throttle - game tick rate naturally limits frequency)
-    send_game_state(ctx, *ctx.players[playerIndex].snake);
-    ctx.players[playerIndex].lastMpSent = SDL_GetTicks();
-}
-
 void NetworkManager::sendGameMessage(json_t* message)
 {
     if (!ctx || !ctx->network.api || ctx->network.sessionId.empty() || !message)
@@ -617,23 +624,106 @@ static void sendGlobalPauseState(GameContext& ctx, bool paused, const std::strin
     if (!ctx.network.api || ctx.network.sessionId.empty())
         return;
     
-    JsonPtr pauseUpdate(json_object());
-    json_object_set_new(pauseUpdate.get(), "type", json_string("state_sync"));
-    json_object_set_new(pauseUpdate.get(), "globalPaused", json_boolean(paused));
-    json_object_set_new(pauseUpdate.get(), "pausedBy", json_string(pauserClientId.c_str()));
-    json_object_set_new(pauseUpdate.get(), "totalPausedTime", json_integer(ctx.match.totalPausedTime));
-    json_object_set_new(pauseUpdate.get(), "pauseStartTime", json_integer(ctx.match.pauseStartTime));
+    auto pauseUpdate = JsonBuilder()
+        .set("type", "state_sync")
+        .set("globalPaused", paused)
+        .set("pausedBy", pauserClientId.c_str())
+        .set("totalPausedTime", ctx.match.totalPausedTime)
+        .set("pauseStartTime", ctx.match.pauseStartTime)
+        .buildPtr();
     mp_api_game(ctx.network.api, pauseUpdate.get());
 }
 
-// ========== PLAYER MANAGEMENT HELPERS ==========
+static void handlePlayerInput(GameContext& ctx, const std::string& clientId, json_t* data)
+{
+    // Only host processes inputs!
+    if (!ctx.network.isHost) return;
+    
+    int playerIdx = find_player_by_client_id(ctx, clientId);
+    if (playerIdx < 0 || !ctx.players[playerIdx].snake) return;
+    
+    json_t* dirVal = json_object_get(data, "direction");
+    if (!json_is_string(dirVal)) return;
+    
+    const char* dirStr = json_string_value(dirVal);
+    Direction dir = Direction::NONE;
+    
+    if (strcmp(dirStr, "UP") == 0)    dir = Direction::UP;
+    else if (strcmp(dirStr, "DOWN") == 0)  dir = Direction::DOWN;
+    else if (strcmp(dirStr, "LEFT") == 0)  dir = Direction::LEFT;
+    else if (strcmp(dirStr, "RIGHT") == 0) dir = Direction::RIGHT;
+    
+    if (dir != Direction::NONE)
+    {
+        ctx.players[playerIdx].snake->setDirection(dir);
+    }
+}
+
+static void handleGameState(GameContext& ctx, json_t* data)
+{
+    if (ctx.network.isHost)
+    return;
+    
+    json_t* foodX = json_object_get(data, "foodX");
+    json_t* foodY = json_object_get(data, "foodY");
+    if (foodX && foodY && ctx.food)
+    {
+        Position foodPos = {(int)json_integer_value(foodX), (int)json_integer_value(foodY)};
+        ctx.food->setPosition(foodPos);
+    }
+    
+    json_t* playersArray = json_object_get(data, "players");
+    if (json_is_array(playersArray))
+    {
+        size_t index;
+        json_t* playerObj;
+        
+        json_array_foreach(playersArray, index, playerObj)
+        {
+            int playerIdx = (int)json_integer_value(json_object_get(playerObj, "index"));
+            bool alive = json_boolean_value(json_object_get(playerObj, "alive"));
+            
+            if (playerIdx < 0 || playerIdx >= 4)
+            continue;
+            if (!ctx.players[playerIdx].snake)
+            continue;
+            
+            json_t* bodyArray = json_object_get(playerObj, "body");
+            if (json_is_array(bodyArray)) 
+            {
+                std::deque<Position> newBody;
+                
+                size_t i;
+                json_t* segment;
+                json_array_foreach(bodyArray, i, segment) 
+                {
+                    Position pos;
+                    pos.x = (int)json_integer_value(json_object_get(segment, "x"));
+                    pos.y = (int)json_integer_value(json_object_get(segment, "y"));
+                    newBody.push_back(pos);
+                }
+                
+                if (!newBody.empty())
+                {
+                    ctx.players[playerIdx].snake->setBody(newBody);
+                }
+            }
+            if (!alive && ctx.players[playerIdx].snake->isAlive())
+            {
+                ctx.players[playerIdx].snake->setAlive(false);
+            }
+        }
+    }
+}
 
 static void add_player(GameContext& ctx, const std::string& clientId)
 {
-    // Find first available slot
-    for (int i = 0; i < 4; i++) {
-        if (!ctx.players[i].active) {
-            ctx.players[i].snake = std::make_unique<Snake>(PLAYER_COLORS[i], PLAYER_SPAWN_POSITIONS[i]);
+    for (int i = 0; i < 4; i++)
+    {
+        if (!ctx.players[i].active)
+        {
+            Position spawnPos = {Config::Spawn::PLAYER_SPAWN_X[i], Config::Spawn::PLAYER_SPAWN_Y[i]};
+            ctx.players[i].snake = std::make_unique<Snake>(Config::Render::PLAYER_COLORS[i], spawnPos);
             ctx.players[i].clientId = clientId;
             ctx.players[i].active = true;
             ctx.players[i].lastMpSent = 0;
@@ -656,84 +746,6 @@ static int find_player_by_client_id(const GameContext& ctx, const std::string& c
     return -1;
 }
 
-static void update_remote_player(GameContext& ctx, const std::string& clientId, json_t* data)
-{
-    int idx = find_player_by_client_id(ctx, clientId);
-    
-    if (idx < 0 || !ctx.players[idx].snake) {
-        return;
-    }
-
-    json_t *bodyArray = json_object_get(data, "body");
-
-    if (json_is_array(bodyArray) && json_array_size(bodyArray) > 0)
-    {
-        std::deque<Position> newBody;
-        
-        size_t index;
-        json_t *segment;
-
-        json_array_foreach(bodyArray, index, segment)
-        {
-        json_t *x_val = json_object_get(segment, "x");
-        json_t *y_val = json_object_get(segment, "y");
-            
-            if (json_is_integer(x_val) && json_is_integer(y_val))
-            {
-                Position pos;
-                pos.x = json_integer_value(x_val);
-                pos.y = json_integer_value(y_val);
-                
-                // CLIENT VALIDATION: Check position is within valid bounds
-                if (pos.x < 0 || pos.x >= GRID_WIDTH || pos.y < 0 || pos.y >= GRID_HEIGHT) {
-                    std::cerr << "WARNING: Invalid position from client " << clientId 
-                              << " (" << pos.x << "," << pos.y << ") - rejecting update" << std::endl;
-                    return;  // Reject entire update if any position is invalid
-                }
-                
-                newBody.push_back(pos);
-            }
-        }
-        
-        if (newBody.size() > 400) {
-            std::cerr << "WARNING: Suspicious body length from client " << clientId 
-                      << " (" << newBody.size() << " segments) - rejecting" << std::endl;
-            return;
-        }
-        
-        if (!newBody.empty())
-        {
-            ctx.players[idx].snake->setBody(newBody);
-        }
-    }
-
-    json_t *score_val = json_object_get(data, "score");
-    if (json_is_integer(score_val))
-    {
-        int score = json_integer_value(score_val);
-        // Validate score is reasonable (0 to 10000)
-        if (score >= 0 && score <= 10000) {
-            ctx.players[idx].snake->setScore(score);
-        } else {
-            std::cerr << "WARNING: Invalid score from client " << clientId 
-                      << " (" << score << ") - ignoring" << std::endl;
-        }
-    }
-    
-    json_t *alive_val = json_object_get(data, "alive");
-    if (json_is_boolean(alive_val))
-    {
-        ctx.players[idx].snake->setAlive(json_boolean_value(alive_val));
-    }
-    
-    // Receive paused status
-    json_t *paused_val = json_object_get(data, "paused");
-    if (json_is_boolean(paused_val))
-    {
-        ctx.players[idx].paused = json_boolean_value(paused_val);
-    }
-}
-
 static void remove_player(GameContext& ctx, const std::string& clientId)
 {
     for (int i = 0; i < 4; i++)
@@ -749,8 +761,6 @@ static void remove_player(GameContext& ctx, const std::string& clientId)
     }
 }
 
-// ========== CRITICAL FIX IMPLEMENTATIONS ==========
-
 static void sendFullStateSync(GameContext& ctx)
 {
     if (!ctx.network.api || ctx.network.sessionId.empty() || !ctx.network.isHost)
@@ -759,32 +769,30 @@ static void sendFullStateSync(GameContext& ctx)
     JsonPtr gameUpdate(json_object());
     json_object_set_new(gameUpdate.get(), "type", json_string("state_sync"));
     
-    // Food position
-    if (ctx.food) {
+    if (ctx.food)
+    {
         json_object_set_new(gameUpdate.get(), "foodX", json_integer(ctx.food->getPosition().x));
         json_object_set_new(gameUpdate.get(), "foodY", json_integer(ctx.food->getPosition().y));
     }
     
-    // Match timing
     json_object_set_new(gameUpdate.get(), "matchStartTime", json_integer(ctx.match.matchStartTime));
     json_object_set_new(gameUpdate.get(), "elapsedMs", json_integer(ctx.match.syncedElapsedMs));
     
-    // Pause state
     json_object_set_new(gameUpdate.get(), "globalPaused", json_boolean(!ctx.match.pausedByClientId.empty()));
     json_object_set_new(gameUpdate.get(), "pausedBy", json_string(ctx.match.pausedByClientId.c_str()));
     json_object_set_new(gameUpdate.get(), "totalPausedTime", json_integer(ctx.match.totalPausedTime));
     json_object_set_new(gameUpdate.get(), "pauseStartTime", json_integer(ctx.match.pauseStartTime));
     
-    // Player list
     JsonPtr playersArray(json_array());
-    for (int i = 0; i < 4; i++) {
-        if (ctx.players[i].active && !ctx.players[i].clientId.empty()) {
+    for (int i = 0; i < 4; i++)
+    {
+        if (ctx.players[i].active && !ctx.players[i].clientId.empty()) 
+        {
             json_array_append_new(playersArray.get(), json_string(ctx.players[i].clientId.c_str()));
         }
     }
     json_object_set_new(gameUpdate.get(), "players", playersArray.release());
     
-    // Send the full state
     mp_api_game(ctx.network.api, gameUpdate.get());
     ctx.network.lastStateSyncSent = SDL_GetTicks();
     
@@ -793,26 +801,20 @@ static void sendFullStateSync(GameContext& ctx)
 
 static void handleHostDisconnect(GameContext& ctx)
 {
-    std::cout << "========================================" << std::endl;
     std::cout << "HOST HAS DISCONNECTED!" << std::endl;
-    std::cout << "Returning to menu..." << std::endl;
-    std::cout << "========================================" << std::endl;
-    
-    // Trigger state change back to menu
     if (ctx.onStateChange) {
         ctx.onStateChange(static_cast<int>(GameState::MENU));
     }
 }
 
-// NetworkManager implementations for critical fixes
-
 void NetworkManager::sendPeriodicStateSync()
 {
-    if (!ctx || !ctx->network.isHost) return;
+    if (!ctx || !ctx->network.isHost)
+    return;
     
     Uint32 currentTime = SDL_GetTicks();
-    // Send full state every 5 seconds
-    if (currentTime - ctx->network.lastStateSyncSent >= 5000) {
+    if (currentTime - ctx->network.lastStateSyncSent >= 1000)
+    {
         sendFullStateSync(*ctx);
     }
 }
